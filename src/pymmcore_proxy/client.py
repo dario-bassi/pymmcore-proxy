@@ -151,8 +151,14 @@ class _MDAController:
     def run(self, sequence: Any) -> None:
         """Run an MDA sequence on the server (blocking).
 
-        Blocks until the server finishes AND the sequenceFinished/sequenceCanceled
-        signal arrives locally, so all frameReady signals have been delivered.
+        Accepts an ``MDASequence``, a ``dict``, or any iterable of
+        ``MDAEvent`` objects (including generators and ``Queue``-backed
+        iterators).
+
+        For serializable sequences (``MDASequence``/``dict``), the whole
+        sequence is sent via RPC.  For arbitrary iterables, events are
+        streamed one-by-one over a dedicated WebSocket so that
+        lazily-produced events (e.g. from a ``Queue``) work correctly.
         """
         from useq import MDASequence
 
@@ -166,6 +172,14 @@ class _MDAController:
         except Exception:
             pass
 
+        if isinstance(sequence, MDASequence):
+            self._run_rpc(sequence)
+        else:
+            self._run_streaming(sequence)
+
+    # -- RPC-based run (full sequence sent at once) --
+
+    def _run_rpc(self, sequence: Any) -> None:
         done = threading.Event()
 
         def _on_done(*args: Any) -> None:
@@ -175,7 +189,53 @@ class _MDAController:
         self.events.sequenceCanceled.connect(_on_done)
         try:
             self._client._rpc("mda.run", sequence)
-            # Wait for the finish/cancel signal to arrive via WebSocket
+            done.wait(timeout=10.0)
+        finally:
+            self.events.sequenceFinished.disconnect(_on_done)
+            self.events.sequenceCanceled.disconnect(_on_done)
+
+    # -- Streaming run (events sent one-by-one via WebSocket) --
+
+    def _run_streaming(self, events: Any) -> None:
+        from websockets.sync.client import connect as ws_connect
+
+        ws_url = (
+            self._client._url
+            .replace("http://", "ws://")
+            .replace("https://", "wss://")
+            + "/mda/stream"
+        )
+
+        done = threading.Event()
+
+        def _on_done(*args: Any) -> None:
+            done.set()
+
+        self.events.sequenceFinished.connect(_on_done)
+        self.events.sequenceCanceled.connect(_on_done)
+        try:
+            with ws_connect(ws_url) as ws:
+                ws.send(json.dumps({"action": "start"}))
+
+                # Stream events — runs in this thread, which is fine
+                # because the signal listener runs in its own thread.
+                for event in events:
+                    if done.is_set():
+                        break
+                    ws.send(json.dumps({"event": encode(event)}))
+
+                ws.send(json.dumps({"action": "stop"}))
+
+                # Wait for server "done" acknowledgement
+                try:
+                    raw = ws.recv(timeout=30.0)
+                    msg = json.loads(raw)
+                    if msg.get("error"):
+                        raise RuntimeError(msg["error"])
+                except TimeoutError:
+                    pass
+
+            # Ensure sequenceFinished/Canceled signal has arrived
             done.wait(timeout=10.0)
         finally:
             self.events.sequenceFinished.disconnect(_on_done)
@@ -259,6 +319,7 @@ class RemoteMMCore:
 
         # WebSocket signal listener
         self._signal_stop = threading.Event()
+        self._signal_ws: Any = None  # active websocket, for clean shutdown
         self._signal_thread: threading.Thread | None = None
         if connect_signals:
             self._start_signal_listener()
@@ -357,17 +418,21 @@ class RemoteMMCore:
         from websockets.sync.client import connect
 
         with connect(ws_url) as ws:
+            self._signal_ws = ws
             logger.debug("Signal listener connected to %s", ws_url)
-            while not self._signal_stop.is_set():
-                try:
-                    raw = ws.recv(timeout=1.0)
-                except TimeoutError:
-                    continue
-                try:
-                    msg = json.loads(raw)
-                    self._dispatch_signal(msg)
-                except Exception as e:
-                    logger.warning("Failed to dispatch signal: %s", e)
+            try:
+                while not self._signal_stop.is_set():
+                    try:
+                        raw = ws.recv()
+                    except Exception:
+                        break
+                    try:
+                        msg = json.loads(raw)
+                        self._dispatch_signal(msg)
+                    except Exception as e:
+                        logger.warning("Failed to dispatch signal: %s", e)
+            finally:
+                self._signal_ws = None
 
     def _dispatch_signal(self, msg: dict) -> None:
         """Route an incoming signal message to the correct local signal."""
@@ -430,6 +495,13 @@ class RemoteMMCore:
     def close(self) -> None:
         """Disconnect from the server."""
         self._signal_stop.set()
+        # Close the WS to unblock recv() immediately
+        ws = self._signal_ws
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:
+                pass
         if self._signal_thread is not None:
             self._signal_thread.join(timeout=3.0)
         self._http.close()

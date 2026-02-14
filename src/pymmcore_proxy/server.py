@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import queue
 import time
 from typing import Any
 
@@ -46,6 +47,27 @@ _MDA_SIGNALS = [
 ]
 
 
+class _WSEventIterator:
+    """Iterator that yields MDAEvents from a queue, fed by a WebSocket.
+
+    Used by the /mda/stream endpoint.  ``__next__`` blocks until an event
+    is available.  Cancellation is handled by putting ``None`` (sentinel)
+    into the queue from the RPC handler when ``mda.cancel`` is called.
+    """
+
+    def __init__(self, event_queue: queue.Queue):
+        self._queue = event_queue
+
+    def __iter__(self) -> _WSEventIterator:
+        return self
+
+    def __next__(self) -> Any:
+        item = self._queue.get()
+        if item is None:
+            raise StopIteration
+        return item
+
+
 class ProxyServer:
     """Wraps a CMMCorePlus/UniMMCore and serves it over HTTP + WebSocket."""
 
@@ -55,6 +77,7 @@ class ProxyServer:
         self.port = port
         self._ws_clients: set[WebSocket] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._stream_queue: queue.Queue | None = None
         self._start_time = time.time()
         self._command_count = 0
         self._recent_commands: list[dict] = []
@@ -66,6 +89,7 @@ class ProxyServer:
                 Route("/health", self._handle_health, methods=["GET"]),
                 Route("/stats", self._handle_stats, methods=["GET"]),
                 WebSocketRoute("/signals", self._handle_signals),
+                WebSocketRoute("/mda/stream", self._handle_mda_stream),
             ],
             on_startup=[self._on_startup],
         )
@@ -174,6 +198,11 @@ class ProxyServer:
 
             func = self._resolve_dotted(method)
             result = await asyncio.to_thread(func, *args, **kwargs)
+
+            # Unblock streaming iterator immediately on cancel
+            if method == "mda.cancel" and self._stream_queue is not None:
+                self._stream_queue.put(None)
+
             return JSONResponse({"ok": True, "value": encode(result)})
         except Exception as e:
             return JSONResponse(
@@ -242,8 +271,79 @@ class ProxyServer:
         }
 
     # ------------------------------------------------------------------
-    # WebSocket handler
+    # WebSocket handlers
     # ------------------------------------------------------------------
+
+    async def _handle_mda_stream(self, websocket: WebSocket) -> None:
+        """Stream MDA events from a client iterable.
+
+        Protocol:
+            1. Client sends ``{"action": "start"}``
+            2. Client sends ``{"event": <encoded MDAEvent>}`` for each event
+            3. Client sends ``{"action": "stop"}`` when the iterable is exhausted
+            4. Server sends ``{"action": "done"}`` (with optional ``"error"``)
+        """
+        await websocket.accept()
+        self._record_command("mda.stream")
+
+        raw = await websocket.receive_text()
+        msg = json.loads(raw)
+        if msg.get("action") != "start":
+            await websocket.close()
+            return
+
+        event_queue: queue.Queue = queue.Queue()
+        iterator = _WSEventIterator(event_queue)
+        self._stream_queue = event_queue
+        mda_error: list[Exception | None] = [None]
+        mda_done = asyncio.Event()
+
+        async def _run_mda() -> None:
+            try:
+                await asyncio.to_thread(self.core.mda.run, iterator)
+            except Exception as e:
+                mda_error[0] = e
+            finally:
+                mda_done.set()
+
+        mda_task = asyncio.create_task(_run_mda())
+
+        # Receive events from the client, stop when MDA finishes or client
+        # sends "stop" (iterator exhausted).
+        try:
+            while not mda_done.is_set():
+                # Wait for either a WS message or MDA completion — whichever
+                # comes first — so cancel unblocks immediately.
+                recv_task = asyncio.ensure_future(websocket.receive_text())
+                done_task = asyncio.ensure_future(mda_done.wait())
+                finished, _ = await asyncio.wait(
+                    {recv_task, done_task}, return_when=asyncio.FIRST_COMPLETED,
+                )
+                if done_task in finished:
+                    recv_task.cancel()
+                    break
+                done_task.cancel()
+                raw = recv_task.result()
+                msg = json.loads(raw)
+                if msg.get("action") == "stop":
+                    event_queue.put(None)
+                    break
+                event_data = msg.get("event")
+                if event_data is not None:
+                    event_queue.put(decode(event_data))
+        except WebSocketDisconnect:
+            event_queue.put(None)
+
+        await mda_task
+        self._stream_queue = None
+
+        result: dict[str, Any] = {"action": "done"}
+        if mda_error[0]:
+            result["error"] = str(mda_error[0])
+        try:
+            await websocket.send_text(json.dumps(result))
+        except Exception:
+            pass
 
     async def _handle_signals(self, websocket: WebSocket):
         await websocket.accept()
