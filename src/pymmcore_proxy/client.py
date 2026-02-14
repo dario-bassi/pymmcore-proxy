@@ -1,0 +1,450 @@
+"""RemoteMMCore — drop-in network client for pymmcore-plus.
+
+Usage:
+    from pymmcore_proxy import connect
+    core = connect("http://127.0.0.1:5600")
+
+    # Use exactly like CMMCorePlus:
+    core.snapImage()
+    img = core.getImage()           # real numpy array
+    core.setXYPosition(100, 200)
+    core.events.propertyChanged.connect(my_callback)
+
+    # MDA runs on the server, signals stream back via WebSocket:
+    from useq import MDASequence
+    core.mda.events.frameReady.connect(on_frame)
+    core.mda.run(MDASequence(time_plan={"interval": 1, "loops": 10}))
+
+    core.close()
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+import time
+from typing import Any
+
+import httpx
+from psygnal import Signal
+
+from ._serialize import decode, encode
+
+logger = logging.getLogger("pymmcore_proxy.client")
+
+
+# ------------------------------------------------------------------
+# Nested proxy — transparent dotted attribute access
+# ------------------------------------------------------------------
+
+class _NestedProxy:
+    """Proxy for nested attribute access on the remote core.
+
+    Accessing ``core.mda.engine._z_correction`` produces a chain of
+    _NestedProxy objects.  Calling, bool-testing, iterating, etc.
+    resolve the value via RPC.
+    """
+
+    def __init__(self, client: RemoteMMCore, path: str):
+        object.__setattr__(self, "_client", client)
+        object.__setattr__(self, "_path", path)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return _NestedProxy(self._client, f"{self._path}.{name}")
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("__"):
+            super().__setattr__(name, value)
+        else:
+            self._client._rpc_setattr(f"{self._path}.{name}", value)
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return self._client._rpc(self._path, *args, **kwargs)
+
+    def _resolve(self) -> Any:
+        return self._client._rpc_getattr(self._path)
+
+    def __bool__(self) -> bool:
+        return bool(self._resolve())
+
+    def __eq__(self, other: object) -> bool:
+        return self._resolve() == other
+
+    def __repr__(self) -> str:
+        return repr(self._resolve())
+
+    def __int__(self) -> int:
+        return int(self._resolve())
+
+    def __float__(self) -> float:
+        return float(self._resolve())
+
+    def __iter__(self):
+        return iter(self._resolve())
+
+    def __len__(self) -> int:
+        return len(self._resolve())
+
+    def __getitem__(self, key: Any) -> Any:
+        return self._resolve()[key]
+
+    def __contains__(self, item: Any) -> bool:
+        return item in self._resolve()
+
+    def __hash__(self) -> int:
+        return hash(self._resolve())
+
+
+# ------------------------------------------------------------------
+# Signal groups — mirror CMMCorePlus signal signatures
+# ------------------------------------------------------------------
+
+class _CoreSignals:
+    """Signals emitted by the microscope core (mirrors CMMCorePlus.events)."""
+
+    propertyChanged = Signal(object, object, object)
+    configSet = Signal(object, object)
+    exposureChanged = Signal(object, object)
+    stagePositionChanged = Signal(object, object)
+    XYStagePositionChanged = Signal(object, object, object)
+    systemConfigurationLoaded = Signal()
+
+
+class _MDASignals:
+    """Signals emitted during MDA acquisition (mirrors MDARunner.events)."""
+
+    frameReady = Signal(object, object, object)
+    sequenceStarted = Signal(object, object)
+    sequenceFinished = Signal(object)
+    sequenceCanceled = Signal(object)
+    sequencePauseToggled = Signal(object)
+
+
+# ------------------------------------------------------------------
+# MDA controller — server-driven, signals forwarded via WebSocket
+# ------------------------------------------------------------------
+
+class _MDAController:
+    """Server-driven MDA controller.
+
+    Delegates run/cancel/pause to the server's CMMCorePlus.mda.
+    Signals are forwarded over WebSocket and emitted locally.
+    Private attributes (``_running``, ``_paused``, etc.) are fetched
+    from the server via RPC getattr.
+    """
+
+    def __init__(self, client: RemoteMMCore):
+        self._client = client
+        self.events = _MDASignals()
+
+    # -- signals alias (pymmcore-plus tests access core.mda._signals) --
+
+    @property
+    def _signals(self) -> _MDASignals:
+        return self.events
+
+    # -- delegation to server --
+
+    def run(self, sequence: Any) -> None:
+        """Run an MDA sequence on the server (blocking).
+
+        Blocks until the server finishes AND the sequenceFinished/sequenceCanceled
+        signal arrives locally, so all frameReady signals have been delivered.
+        """
+        from useq import MDASequence
+
+        if isinstance(sequence, dict):
+            sequence = MDASequence(**sequence)
+
+        # Reset stale cancel flag (a previous cancel() may have arrived
+        # after the MDA finished, leaving _canceled=True on the server).
+        try:
+            self._client._rpc_setattr("mda._canceled", False)
+        except Exception:
+            pass
+
+        done = threading.Event()
+
+        def _on_done(*args: Any) -> None:
+            done.set()
+
+        self.events.sequenceFinished.connect(_on_done)
+        self.events.sequenceCanceled.connect(_on_done)
+        try:
+            self._client._rpc("mda.run", sequence)
+            # Wait for the finish/cancel signal to arrive via WebSocket
+            done.wait(timeout=10.0)
+        finally:
+            self.events.sequenceFinished.disconnect(_on_done)
+            self.events.sequenceCanceled.disconnect(_on_done)
+
+    def cancel(self) -> None:
+        self._client._rpc("mda.cancel")
+
+    def toggle_pause(self) -> None:
+        self._client._rpc("mda.toggle_pause")
+
+    def is_running(self) -> bool:
+        return self._client._rpc("mda.is_running")
+
+    def is_paused(self) -> bool:
+        return self._client._rpc("mda.is_paused")
+
+    def set_engine(self, engine: Any) -> None:
+        self._client._rpc("mda.set_engine", engine)
+
+    @property
+    def engine(self) -> _NestedProxy:
+        return _NestedProxy(self._client, "mda.engine")
+
+    @property
+    def _engine(self) -> _NestedProxy:
+        return _NestedProxy(self._client, "mda._engine")
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        # Proxy private attrs like _running, _paused, _canceled to server
+        return self._client._rpc_getattr(f"mda.{name}")
+
+
+# ------------------------------------------------------------------
+# Signal listener (WebSocket, background thread)
+# ------------------------------------------------------------------
+
+# Maps "group.signal" → (signal_group_attr, signal_name)
+_SIGNAL_MAP: dict[str, tuple[str, str]] = {}
+for _name in [
+    "propertyChanged", "configSet", "exposureChanged",
+    "stagePositionChanged", "XYStagePositionChanged",
+    "systemConfigurationLoaded",
+]:
+    _SIGNAL_MAP[f"events.{_name}"] = ("events", _name)
+for _name in [
+    "frameReady", "sequenceStarted", "sequenceFinished",
+    "sequenceCanceled", "sequencePauseToggled",
+]:
+    _SIGNAL_MAP[f"mda.events.{_name}"] = ("mda.events", _name)
+
+
+# ------------------------------------------------------------------
+# The client
+# ------------------------------------------------------------------
+
+class RemoteMMCore:
+    """Drop-in replacement for CMMCorePlus that proxies calls over HTTP.
+
+    All method calls are forwarded to the server via POST /rpc.
+    Signals are received via a WebSocket listener and emitted locally.
+    MDA sequences run on the server — signals stream back via WebSocket.
+    """
+
+    def __init__(
+        self,
+        url: str = "http://127.0.0.1:5600",
+        *,
+        timeout: float = 30.0,
+        connect_signals: bool = True,
+    ):
+        self._url = url.rstrip("/")
+        self._timeout = timeout
+        self._http = httpx.Client(base_url=self._url, timeout=timeout)
+
+        # Local signal groups
+        self.events = _CoreSignals()
+        self.mda = _MDAController(self)
+
+        # WebSocket signal listener
+        self._signal_stop = threading.Event()
+        self._signal_thread: threading.Thread | None = None
+        if connect_signals:
+            self._start_signal_listener()
+
+    # ------------------------------------------------------------------
+    # RPC
+    # ------------------------------------------------------------------
+
+    def _rpc(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        """Call a method on the remote core (supports dotted paths)."""
+        payload = {
+            "method": method,
+            "args": [encode(a) for a in args],
+            "kwargs": {k: encode(v) for k, v in kwargs.items()},
+        }
+        resp = self._http.post("/rpc", json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("ok"):
+            return decode(data.get("value"))
+        error_type = data.get("error_type", "RemoteError")
+        error_msg = data.get("error", "Unknown error")
+        raise RuntimeError(f"{error_type}: {error_msg}")
+
+    def _rpc_getattr(self, attr: str) -> Any:
+        """Read an attribute from the remote core."""
+        resp = self._http.post("/rpc", json={"action": "getattr", "attr": attr})
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("ok"):
+            return decode(data.get("value"))
+        error_type = data.get("error_type", "RemoteError")
+        error_msg = data.get("error", "Unknown error")
+        raise RuntimeError(f"{error_type}: {error_msg}")
+
+    def _rpc_setattr(self, attr: str, value: Any) -> None:
+        """Set an attribute on the remote core."""
+        resp = self._http.post(
+            "/rpc", json={"action": "setattr", "attr": attr, "value": encode(value)}
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data.get("ok"):
+            error_type = data.get("error_type", "RemoteError")
+            error_msg = data.get("error", "Unknown error")
+            raise RuntimeError(f"{error_type}: {error_msg}")
+
+    def __getattr__(self, name: str) -> Any:
+        # Python internals — never proxy
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        # Known local private attrs
+        if name == "_events":
+            return self.events
+        # Single-underscore private attrs — fetch from remote
+        if name.startswith("_"):
+            return self._rpc_getattr(name)
+
+        # Public attrs — return a proxy callable
+        def _proxy(*args: Any, **kwargs: Any) -> Any:
+            return self._rpc(name, *args, **kwargs)
+
+        return _proxy
+
+    # ------------------------------------------------------------------
+    # Signal listener
+    # ------------------------------------------------------------------
+
+    def _start_signal_listener(self) -> None:
+        """Start the background WebSocket signal listener."""
+        self._signal_thread = threading.Thread(
+            target=self._signal_listener_loop,
+            name="pymmcore-proxy-signals",
+            daemon=True,
+        )
+        self._signal_thread.start()
+
+    def _signal_listener_loop(self) -> None:
+        """Background loop: connect to /signals WS, dispatch to local signals."""
+        ws_url = self._url.replace("http://", "ws://").replace(
+            "https://", "wss://"
+        ) + "/signals"
+
+        while not self._signal_stop.is_set():
+            try:
+                self._listen_ws(ws_url)
+            except Exception as e:
+                if self._signal_stop.is_set():
+                    return
+                logger.debug("Signal connection lost (%s), reconnecting...", e)
+                # Back off before reconnecting
+                self._signal_stop.wait(timeout=1.0)
+
+    def _listen_ws(self, ws_url: str) -> None:
+        """Connect and listen until disconnected."""
+        from websockets.sync.client import connect
+
+        with connect(ws_url) as ws:
+            logger.debug("Signal listener connected to %s", ws_url)
+            while not self._signal_stop.is_set():
+                try:
+                    raw = ws.recv(timeout=1.0)
+                except TimeoutError:
+                    continue
+                try:
+                    msg = json.loads(raw)
+                    self._dispatch_signal(msg)
+                except Exception as e:
+                    logger.warning("Failed to dispatch signal: %s", e)
+
+    def _dispatch_signal(self, msg: dict) -> None:
+        """Route an incoming signal message to the correct local signal."""
+        group = msg.get("group", "")
+        signal_name = msg.get("signal", "")
+        raw_args = msg.get("args", [])
+
+        key = f"{group}.{signal_name}"
+        mapping = _SIGNAL_MAP.get(key)
+        if mapping is None:
+            logger.debug("Unknown signal: %s", key)
+            return
+
+        group_attr, sig_name = mapping
+        # Navigate to the signal group
+        obj = self
+        for part in group_attr.split("."):
+            obj = getattr(obj, part, None)
+            if obj is None:
+                return
+
+        sig = getattr(obj, sig_name, None)
+        if sig is None:
+            return
+
+        decoded_args = [decode(a) for a in raw_args]
+        try:
+            sig.emit(*decoded_args)
+        except Exception as e:
+            logger.warning("Error emitting %s: %s", key, e)
+
+    # ------------------------------------------------------------------
+    # MDA convenience (mirrors CMMCorePlus.run_mda)
+    # ------------------------------------------------------------------
+
+    def run_mda(
+        self, events: Any, *, output: Any = None, block: bool = False
+    ) -> threading.Thread:
+        """Run an MDA sequence on the server.
+
+        Returns a Thread whose .join() is a no-op (the MDA already ran
+        synchronously from the proxy's perspective).
+        """
+        self.mda.run(events)
+        # Return a "finished" thread so callers can do thread.join()
+        t = threading.Thread(target=lambda: None)
+        t.start()
+        t.join()
+        return t
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def health(self) -> dict:
+        """Check server health."""
+        resp = self._http.get("/health")
+        return resp.json()
+
+    def close(self) -> None:
+        """Disconnect from the server."""
+        self._signal_stop.set()
+        if self._signal_thread is not None:
+            self._signal_thread.join(timeout=3.0)
+        self._http.close()
+
+    def __enter__(self) -> RemoteMMCore:
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    def __repr__(self) -> str:
+        return f"RemoteMMCore({self._url!r})"
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
