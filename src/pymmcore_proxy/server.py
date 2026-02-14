@@ -14,6 +14,7 @@ import json
 import logging
 import queue
 import time
+import warnings
 from typing import Any
 
 import numpy as np
@@ -110,6 +111,28 @@ class ProxyServer:
     def _on_startup(self):
         self._loop = asyncio.get_event_loop()
         self._connect_signal_forwarding()
+        self._install_warning_hook()
+
+    def _install_warning_hook(self):
+        """Hook warnings.showwarning to broadcast warnings to WS clients.
+
+        The original showwarning is still called, so same-process consumers
+        (like pytest.warns) continue to work.  Remote clients receive the
+        warning as a ``_internal._warning`` WebSocket signal.
+        """
+        original = warnings.showwarning
+
+        def _hook(message, category, filename, lineno, file=None, line=None):
+            # Forward warnings from pymmcore code, not from third-party libraries
+            if "pymmcore" in str(filename):
+                self._broadcast_signal(
+                    "_internal", "_warning",
+                    (category.__name__, str(message)),
+                )
+            # Call original so same-process consumers still see it
+            original(message, category, filename, lineno, file, line)
+
+        warnings.showwarning = _hook
 
     def _connect_signal_forwarding(self):
         """Connect to core signals and forward them over WebSocket."""

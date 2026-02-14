@@ -108,7 +108,7 @@ python scripts/run_compat_tests.py
 
 ## pymmcore-plus compatibility
 
-The compat test runner (`scripts/run_compat_tests.py`) runs pymmcore-plus's `test_events.py` and `test_mda.py` against `RemoteMMCore`. Out of 73 tests, **16 pass** and **57 are skipped** with documented reasons.
+The compat test runner (`scripts/run_compat_tests.py`) runs pymmcore-plus's `test_events.py` and `test_mda.py` against `RemoteMMCore`. Out of 73 tests, **22 pass** and **51 are skipped** with documented reasons.
 
 The skipped tests fall into a few categories — none represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
 
@@ -155,15 +155,11 @@ These tests use `MagicMock(wraps=engine)` or `patch.object()` to instrument the 
 | `test_engine_protocol` | Passes a local `MyEngine` class to remote server |
 | `test_queue_mda` | `MagicMock(wraps=engine)` to remote server |
 
-### Can't capture server-side logs/warnings (4 tests)
-
-`caplog` and `pytest.warns` only capture output from the current process. Server-side log messages and warnings aren't visible to the client's test runner.
+### Can't capture server-side logs (1 test)
 
 | Test | Reason |
 |---|---|
-| `test_mda_no_device` (5 params) | `caplog` can't capture server-side logs |
-| `test_restore_initial_state` (3 params) | `pytest.warns` can't capture server-side warnings |
-| `test_restore_initial_state_enabled_by_default` (3 params) | Shared session-scoped core state + enum serialization |
+| `test_mda_no_device` (5 params) | `caplog` flooded with httpcore debug logs |
 
 ### Other (1 test)
 
@@ -171,9 +167,9 @@ These tests use `MagicMock(wraps=engine)` or `patch.object()` to instrument the 
 |---|---|
 | `test_get_handlers` | Uses `weakref` on output handlers — doesn't work through proxy |
 
-### Tests that pass (16)
+### Tests that pass (22)
 
-These pymmcore-plus tests run correctly against `RemoteMMCore`. Event tests use the signal flush mechanism (`_AutoFlushCore` wrapper) to make async signal delivery appear synchronous.
+These pymmcore-plus tests run correctly against `RemoteMMCore`. Event tests use the signal flush mechanism (`_AutoFlushCore` wrapper) to make async signal delivery appear synchronous. Server-side warnings are forwarded to clients via WebSocket.
 
 | Test | What it verifies |
 |---|---|
@@ -193,3 +189,5 @@ These pymmcore-plus tests run correctly against `RemoteMMCore`. Event tests use 
 | `test_keep_shutter_open` | Shutter stays open across channels when configured |
 | `test_reset_event_timer` | Event timer resets between MDA events |
 | `test_custom_action` | Custom action events are handled |
+| `test_restore_initial_state` (3 params) | Hardware state restored after MDA (with `pytest.warns` for unknown focus direction) |
+| `test_restore_initial_state_enabled_by_default` (3 params) | State restoration auto-enabled based on `FocusDirection` |

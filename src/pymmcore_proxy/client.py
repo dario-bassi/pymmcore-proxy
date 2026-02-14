@@ -24,6 +24,7 @@ import json
 import logging
 import threading
 import time
+import warnings
 from typing import Any
 
 import httpx
@@ -308,6 +309,17 @@ for _name in [
 ]:
     _SIGNAL_MAP[f"mda.events.{_name}"] = ("mda.events", _name)
 
+# Warning category lookup for forwarded server-side warnings
+_WARNING_CATEGORIES: dict[str, type[Warning]] = {
+    "UserWarning": UserWarning,
+    "DeprecationWarning": DeprecationWarning,
+    "RuntimeWarning": RuntimeWarning,
+    "FutureWarning": FutureWarning,
+    "PendingDeprecationWarning": PendingDeprecationWarning,
+    "SyntaxWarning": SyntaxWarning,
+    "ResourceWarning": ResourceWarning,
+}
+
 
 # ------------------------------------------------------------------
 # The client
@@ -460,12 +472,20 @@ class RemoteMMCore:
         signal_name = msg.get("signal", "")
         raw_args = msg.get("args", [])
 
-        # Handle flush markers
-        if group == "_internal" and signal_name == "_flush":
-            flush_id = raw_args[0] if raw_args else ""
-            ev = self._flush_events.get(flush_id)
-            if ev is not None:
-                ev.set()
+        # Handle internal markers
+        if group == "_internal":
+            if signal_name == "_flush":
+                flush_id = raw_args[0] if raw_args else ""
+                ev = self._flush_events.get(flush_id)
+                if ev is not None:
+                    ev.set()
+                return
+            if signal_name == "_warning":
+                category_name = raw_args[0] if raw_args else "UserWarning"
+                message = raw_args[1] if len(raw_args) > 1 else ""
+                category = _WARNING_CATEGORIES.get(category_name, UserWarning)
+                warnings.warn(message, category, stacklevel=2)
+                return
             return
 
         key = f"{group}.{signal_name}"

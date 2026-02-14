@@ -93,13 +93,8 @@ SKIP_TESTS: dict[str, str] = {
     "test_queue_mda": "can't pass MagicMock(wraps=engine) to remote server",
     # Uses weakref on output handlers — doesn't work through proxy
     "test_get_handlers": "weakref on proxy output handlers not supported",
-    # caplog won't capture server-side logs
-    "test_mda_no_device": "caplog can't capture server-side log messages",
-    # Uses _warn_focus_dir.cache_clear() (server-side) + pytest.warns for
-    # server-side warnings
-    "test_restore_initial_state": "pytest.warns can't capture server-side warnings",
-    "test_restore_initial_state_enabled_by_default":
-        "setFocusDirection with enum arg + shared session-scoped core state",
+    # caplog captures httpcore/httpx debug output, obscuring the pymmcore-plus log
+    "test_mda_no_device": "caplog flooded with httpcore debug logs",
 }
 
 
@@ -231,6 +226,11 @@ def core(_server_url) -> Iterator[Any]:
     time.sleep(0.3)
     # Reset hardware state so tests are isolated
     client.loadSystemConfiguration("MMConfig_Demo.cfg")
+    # Reset engine state (session-scoped engine persists across tests)
+    try:
+        client._rpc_setattr("mda.engine.restore_initial_state", None)
+    except Exception:
+        pass
     yield _AutoFlushCore(client)
     client.close()
 
