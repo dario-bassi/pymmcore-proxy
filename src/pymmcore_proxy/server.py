@@ -35,6 +35,18 @@ _CORE_SIGNALS = [
     "stagePositionChanged",
     "XYStagePositionChanged",
     "systemConfigurationLoaded",
+    "autoShutterSet",
+    "channelGroupChanged",
+    "configDeleted",
+    "configGroupDeleted",
+    "configDefined",
+    "roiSet",
+    "pixelSizeChanged",
+    "continuousSequenceAcquisitionStarting",
+    "continuousSequenceAcquisitionStarted",
+    "sequenceAcquisitionStarting",
+    "sequenceAcquisitionStarted",
+    "sequenceAcquisitionStopped",
 ]
 
 # Signals to forward from core.mda.events
@@ -87,6 +99,7 @@ class ProxyServer:
                 Route("/rpc", self._handle_rpc, methods=["POST"]),
                 Route("/mda/exec_event", self._handle_mda_event, methods=["POST"]),
                 Route("/health", self._handle_health, methods=["GET"]),
+                Route("/signals/flush", self._handle_flush, methods=["GET"]),
                 Route("/stats", self._handle_stats, methods=["GET"]),
                 WebSocketRoute("/signals", self._handle_signals),
                 WebSocketRoute("/mda/stream", self._handle_mda_stream),
@@ -145,6 +158,29 @@ class ProxyServer:
 
     async def _handle_health(self, request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    async def _handle_flush(self, request: Request) -> JSONResponse:
+        """Flush pending signals to all connected WebSocket clients.
+
+        Yields to the event loop so any signals queued via
+        ``run_coroutine_threadsafe`` are sent first, then sends a
+        ``_flush`` marker.  Since WS messages are ordered, the client
+        knows all prior signals have been delivered when it receives
+        the marker.
+        """
+        await asyncio.sleep(0)
+        flush_id = str(time.monotonic())
+        msg = json.dumps({
+            "group": "_internal",
+            "signal": "_flush",
+            "args": [flush_id],
+        })
+        for ws in list(self._ws_clients):
+            try:
+                await ws.send_text(msg)
+            except Exception:
+                self._ws_clients.discard(ws)
+        return JSONResponse({"ok": True, "id": flush_id})
 
     async def _handle_stats(self, request: Request) -> JSONResponse:
         return JSONResponse({

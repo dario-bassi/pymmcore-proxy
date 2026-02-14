@@ -68,22 +68,12 @@ COMPAT_FILES = [
 
 SKIP_TESTS: dict[str, str] = {
     # --- test_events.py ---
-    # All event tests check synchronous signal delivery (mock.assert_called after
-    # setProperty), but signals travel asynchronously via WebSocket through the proxy.
-    "test_set_property_events": "async signal delivery — signals travel via WebSocket",
-    "test_set_state_events": "async signal delivery — signals travel via WebSocket",
-    "test_set_statedevice_property_emits_events": "async signal delivery",
-    "test_device_property_events": "async signal delivery",
-    "test_sequence_acquisition_events": "async signal delivery",
-    "test_shutter_device_events": "async signal delivery",
-    "test_autoshutter_device_events": "async signal delivery",
-    "test_groups_and_presets_events": "async signal delivery",
-    "test_set_camera_roi_event": "async signal delivery",
-    "test_pixel_changed_event": "async signal delivery",
-    "test_set_channelgroup": "async signal delivery",
-    "test_set_focus_device": "async signal delivery",
-    "test_event_signatures": "async signal delivery + missing signals on proxy",
-    "test_deprecated_event_signatures": "async signal delivery + missing signals",
+    # Uses devicePropertyChanged("Camera", "Gain") callable signal filter — proxy
+    # signals are plain psygnal.Signal, not the filtered CMMCorePlus variant.
+    "test_device_property_events": "devicePropertyChanged callable filter not supported",
+    # These check isinstance(signal, PSignalInstance) — proxy uses plain psygnal.Signal
+    "test_event_signatures": "isinstance(signal, PSignalInstance) check on proxy signals",
+    "test_deprecated_event_signatures": "isinstance + pytest.warns(FutureWarning) on proxy",
     # These test CMMCorePlus/signaler internals, not proxy-relevant
     "test_signal_backend_selection": "tests CMMCorePlus signal backend selection internals",
     "test_events_protocols": "tests signaler class internals, not proxy-relevant",
@@ -140,6 +130,34 @@ from pymmcore_proxy import ProxyServer, RemoteMMCore
 
 # --- Incompatible tests (injected by run_compat_tests.py) ---
 SKIP_TESTS = {skip_tests_repr}
+
+
+class _AutoFlushCore:
+    """Wraps RemoteMMCore so every public method call flushes signals.
+
+    This makes signal delivery appear synchronous, which is required by
+    pymmcore-plus tests that assert mock.assert_called() immediately
+    after a method call.
+    """
+
+    def __init__(self, client):
+        object.__setattr__(self, "_client", client)
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if callable(attr) and not name.startswith("_"):
+            def wrapper(*args, **kwargs):
+                result = attr(*args, **kwargs)
+                try:
+                    self._client.flush_signals()
+                except Exception:
+                    pass
+                return result
+            return wrapper
+        return attr
+
+    def __setattr__(self, name, value):
+        setattr(self._client, name, value)
 
 
 def pytest_collection_modifyitems(config, items):
@@ -200,17 +218,20 @@ def _server_url(_demo_core):
 
 
 @pytest.fixture()
-def core(_server_url) -> Iterator[RemoteMMCore]:
+def core(_server_url) -> Iterator[Any]:
     """A RemoteMMCore client connected to the test server.
 
-    This replaces pymmcore-plus\\'s core fixture.
+    This replaces pymmcore-plus\\'s core fixture.  Wrapped in
+    _AutoFlushCore so signals appear synchronous.
     """
     client = RemoteMMCore(
         _server_url, connect_signals=True, timeout=60.0,
     )
     # Give the signal listener a moment to connect
     time.sleep(0.3)
-    yield client
+    # Reset hardware state so tests are isolated
+    client.loadSystemConfiguration("MMConfig_Demo.cfg")
+    yield _AutoFlushCore(client)
     client.close()
 
 

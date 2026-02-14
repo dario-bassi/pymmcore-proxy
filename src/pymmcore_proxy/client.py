@@ -111,6 +111,18 @@ class _CoreSignals:
     stagePositionChanged = Signal(object, object)
     XYStagePositionChanged = Signal(object, object, object)
     systemConfigurationLoaded = Signal()
+    autoShutterSet = Signal(object)
+    channelGroupChanged = Signal(object)
+    configDeleted = Signal(object, object)
+    configGroupDeleted = Signal(object)
+    configDefined = Signal(object, object, object, object, object)
+    roiSet = Signal(object, object, object, object, object)
+    pixelSizeChanged = Signal(object)
+    continuousSequenceAcquisitionStarting = Signal()
+    continuousSequenceAcquisitionStarted = Signal()
+    sequenceAcquisitionStarting = Signal(object)
+    sequenceAcquisitionStarted = Signal(object)
+    sequenceAcquisitionStopped = Signal(object)
 
 
 class _MDASignals:
@@ -281,6 +293,13 @@ for _name in [
     "propertyChanged", "configSet", "exposureChanged",
     "stagePositionChanged", "XYStagePositionChanged",
     "systemConfigurationLoaded",
+    "autoShutterSet", "channelGroupChanged",
+    "configDeleted", "configGroupDeleted", "configDefined",
+    "roiSet", "pixelSizeChanged",
+    "continuousSequenceAcquisitionStarting",
+    "continuousSequenceAcquisitionStarted",
+    "sequenceAcquisitionStarting", "sequenceAcquisitionStarted",
+    "sequenceAcquisitionStopped",
 ]:
     _SIGNAL_MAP[f"events.{_name}"] = ("events", _name)
 for _name in [
@@ -321,6 +340,7 @@ class RemoteMMCore:
         self._signal_stop = threading.Event()
         self._signal_ws: Any = None  # active websocket, for clean shutdown
         self._signal_thread: threading.Thread | None = None
+        self._flush_events: dict[str, threading.Event] = {}
         if connect_signals:
             self._start_signal_listener()
 
@@ -440,6 +460,14 @@ class RemoteMMCore:
         signal_name = msg.get("signal", "")
         raw_args = msg.get("args", [])
 
+        # Handle flush markers
+        if group == "_internal" and signal_name == "_flush":
+            flush_id = raw_args[0] if raw_args else ""
+            ev = self._flush_events.get(flush_id)
+            if ev is not None:
+                ev.set()
+            return
+
         key = f"{group}.{signal_name}"
         mapping = _SIGNAL_MAP.get(key)
         if mapping is None:
@@ -486,6 +514,21 @@ class RemoteMMCore:
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    def flush_signals(self, timeout: float = 5.0) -> None:
+        """Block until all pending signals have been delivered.
+
+        Sends a flush request to the server, which responds with a marker
+        over the signal WebSocket.  Since WS messages are ordered, the
+        marker arrives after all previously queued signals.
+        """
+        resp = self._http.get("/signals/flush")
+        resp.raise_for_status()
+        flush_id = resp.json().get("id", "")
+        ev = threading.Event()
+        self._flush_events[flush_id] = ev
+        ev.wait(timeout=timeout)
+        self._flush_events.pop(flush_id, None)
 
     def health(self) -> dict:
         """Check server health."""

@@ -57,6 +57,13 @@ def encode(obj: Any) -> Any:
             "data": obj.model_dump(mode="json"),
         }
 
+    # Generic iterable fallback (handles pymmcore Configuration, PropertySetting, etc.)
+    if not isinstance(obj, (str, bytes)) and hasattr(obj, "__iter__"):
+        try:
+            return [encode(x) for x in obj]
+        except Exception:
+            pass
+
     # Fallback: try to convert to string
     return str(obj)
 
