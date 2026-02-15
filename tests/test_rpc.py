@@ -95,9 +95,9 @@ class TestConfig:
 
 class TestErrorHandling:
     def test_nonexistent_method(self, core_no_signals):
-        with pytest.raises(RuntimeError, match="AttributeError"):
+        with pytest.raises(AttributeError):
             core_no_signals.thisMethodDoesNotExist()
 
     def test_bad_args(self, core_no_signals):
-        with pytest.raises(RuntimeError):
+        with pytest.raises(TypeError):
             core_no_signals.setExposure("not_a_number")

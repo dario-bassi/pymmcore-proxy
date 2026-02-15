@@ -22,10 +22,13 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import warnings
-from typing import Any
+from contextlib import contextmanager, suppress
+from re import Pattern
+from typing import Any, Iterator
 
 import httpx
 from psygnal import Signal
@@ -410,6 +413,33 @@ class RemoteMMCore:
     # RPC
     # ------------------------------------------------------------------
 
+    # Mapping of server exception type names to Python exception classes.
+    _EXCEPTION_TYPES: dict[str, type[Exception]] = {
+        "FileNotFoundError": FileNotFoundError,
+        "ValueError": ValueError,
+        "TypeError": TypeError,
+        "KeyError": KeyError,
+        "IndexError": IndexError,
+        "AttributeError": AttributeError,
+        "OSError": OSError,
+        "IOError": IOError,
+        "RuntimeError": RuntimeError,
+        "StopIteration": StopIteration,
+        "OverflowError": OverflowError,
+        "ZeroDivisionError": ZeroDivisionError,
+        "NotImplementedError": NotImplementedError,
+        "PermissionError": PermissionError,
+        "TimeoutError": TimeoutError,
+    }
+
+    @staticmethod
+    def _raise_remote_error(data: dict) -> None:
+        """Raise the appropriate exception from an RPC error response."""
+        error_type = data.get("error_type", "RuntimeError")
+        error_msg = data.get("error", "Unknown error")
+        exc_cls = RemoteMMCore._EXCEPTION_TYPES.get(error_type, RuntimeError)
+        raise exc_cls(error_msg)
+
     def _rpc(self, method: str, *args: Any, **kwargs: Any) -> Any:
         """Call a method on the remote core (supports dotted paths)."""
         payload = {
@@ -422,9 +452,7 @@ class RemoteMMCore:
         data = resp.json()
         if data.get("ok"):
             return decode(data.get("value"))
-        error_type = data.get("error_type", "RemoteError")
-        error_msg = data.get("error", "Unknown error")
-        raise RuntimeError(f"{error_type}: {error_msg}")
+        self._raise_remote_error(data)
 
     def _rpc_getattr(self, attr: str) -> Any:
         """Read an attribute from the remote core."""
@@ -433,9 +461,7 @@ class RemoteMMCore:
         data = resp.json()
         if data.get("ok"):
             return decode(data.get("value"))
-        error_type = data.get("error_type", "RemoteError")
-        error_msg = data.get("error", "Unknown error")
-        raise RuntimeError(f"{error_type}: {error_msg}")
+        self._raise_remote_error(data)
 
     def _rpc_setattr(self, attr: str, value: Any) -> None:
         """Set an attribute on the remote core."""
@@ -445,9 +471,7 @@ class RemoteMMCore:
         resp.raise_for_status()
         data = resp.json()
         if not data.get("ok"):
-            error_type = data.get("error_type", "RemoteError")
-            error_msg = data.get("error", "Unknown error")
-            raise RuntimeError(f"{error_type}: {error_msg}")
+            self._raise_remote_error(data)
 
     def __getattr__(self, name: str) -> Any:
         # Python internals — never proxy
@@ -625,6 +649,177 @@ class RemoteMMCore:
                 yield self.getDeviceObject(dev)
             else:
                 yield dev
+
+    # ------------------------------------------------------------------
+    # Property wrappers (created locally, delegate to RPC)
+    # ------------------------------------------------------------------
+
+    def getPropertyObject(
+        self, device_label: str, property_name: str
+    ) -> Any:
+        """Return a DeviceProperty object bound to a device/property on this core."""
+        from pymmcore_plus import DeviceProperty
+
+        return DeviceProperty(device_label, property_name, self)
+
+    def iterProperties(
+        self,
+        property_type: Any = None,
+        property_name_pattern: Any = None,
+        *,
+        device_type: Any = None,
+        device_label: Any = None,
+        has_limits: bool | None = None,
+        is_read_only: bool | None = None,
+        is_sequenceable: bool | None = None,
+        as_object: bool = True,
+    ) -> Any:
+        """Iterate over currently loaded (device_label, property_name) pairs.
+
+        Mirrors ``CMMCorePlus.iterProperties``.
+        """
+        if property_name_pattern:
+            if isinstance(property_name_pattern, str):
+                ptrn = re.compile(property_name_pattern, re.IGNORECASE)
+            else:
+                ptrn = property_name_pattern
+        else:
+            ptrn = None
+
+        if property_type is None:
+            property_types: set[int] = set()
+        elif isinstance(property_type, int):
+            property_types = {property_type}
+        else:
+            property_types = set(property_type)
+
+        for dev in self.iterDevices(device_type, device_label, as_object=False):
+            for prop in self._rpc("getDevicePropertyNames", dev):
+                if ptrn and not ptrn.search(prop):
+                    continue
+                if (
+                    property_type is not None
+                    and self._rpc("getPropertyType", dev, prop) not in property_types
+                ):
+                    continue
+                if (
+                    has_limits is not None
+                    and self._rpc("hasPropertyLimits", dev, prop) != has_limits
+                ):
+                    continue
+                if (
+                    is_read_only is not None
+                    and self._rpc("isPropertyReadOnly", dev, prop) != is_read_only
+                ):
+                    continue
+                if (
+                    is_sequenceable is not None
+                    and self._rpc("isPropertySequenceable", dev, prop) != is_sequenceable
+                ):
+                    continue
+
+                if as_object:
+                    yield self.getPropertyObject(dev, prop)
+                else:
+                    yield (dev, prop)
+
+    # ------------------------------------------------------------------
+    # Adapter wrappers (created locally, delegate to RPC)
+    # ------------------------------------------------------------------
+
+    def getAdapterObject(self, library_name: str) -> Any:
+        """Return a DeviceAdapter object bound to *library_name* on this core."""
+        from pymmcore_plus import DeviceAdapter
+
+        return DeviceAdapter(library_name, mmcore=self)
+
+    def iterDeviceAdapters(
+        self,
+        adapter_pattern: Any = None,
+        *,
+        as_object: bool = True,
+    ) -> Any:
+        """Iterate over all available device adapters.
+
+        Mirrors ``CMMCorePlus.iterDeviceAdapters``.
+        """
+        adapters: list[str] = list(self._rpc("getDeviceAdapterNames"))
+
+        if adapter_pattern:
+            if isinstance(adapter_pattern, str):
+                ptrn = re.compile(adapter_pattern, re.IGNORECASE)
+            else:
+                ptrn = adapter_pattern
+            adapters = [d for d in adapters if ptrn.search(d)]
+
+        for adapter in adapters:
+            if as_object:
+                yield self.getAdapterObject(adapter)
+            else:
+                yield adapter
+
+    # ------------------------------------------------------------------
+    # Context manager (mirrors CMMCorePlus.setContext)
+    # ------------------------------------------------------------------
+
+    @contextmanager
+    def setContext(self, **kwargs: Any) -> Iterator[None]:
+        """Set core properties in a context, restoring initial values on exit.
+
+        Mirrors ``CMMCorePlus.setContext``.
+        """
+        orig_values: dict[str, Any] = {}
+        try:
+            for name, v in kwargs.items():
+                name = name[0].upper() + name[1:]
+                get_name, set_name = f"get{name}", f"set{name}"
+                orig_values[name] = self._rpc(get_name)
+                if isinstance(v, tuple):
+                    self._rpc(set_name, *v)
+                else:
+                    self._rpc(set_name, v)
+            yield
+        finally:
+            for k, v in orig_values.items():
+                with suppress(AttributeError):
+                    self._rpc(f"set{k}", v)
+
+    # ------------------------------------------------------------------
+    # Objective device pattern (mirrors CMMCorePlus)
+    # ------------------------------------------------------------------
+
+    _DEFAULT_OBJ_PATTERN = re.compile(
+        r"(.+)?(nosepiece|obj(ective)?)(turret)?s?", re.IGNORECASE
+    )
+
+    @property
+    def objective_device_pattern(self) -> Pattern:
+        """Pattern used to guess objective device labels."""
+        try:
+            return object.__getattribute__(self, "_objective_regex")
+        except AttributeError:
+            return self._DEFAULT_OBJ_PATTERN
+
+    @objective_device_pattern.setter
+    def objective_device_pattern(self, value: Pattern | str) -> None:
+        if isinstance(value, str):
+            value = re.compile(value, re.IGNORECASE)
+        elif not isinstance(value, Pattern):
+            raise TypeError(
+                "Objective Pattern must be a string or compiled regex"
+                f" but is type {type(value)}"
+            )
+        self._objective_regex = value
+
+    def guessObjectiveDevices(self) -> list[str]:
+        """Find any loaded devices likely to be an Objective/Nosepiece."""
+        from pymmcore_plus import DeviceType
+
+        return [
+            device
+            for device in self._rpc("getLoadedDevicesOfType", DeviceType.StateDevice)
+            if self.objective_device_pattern.match(device)
+        ]
 
     # ------------------------------------------------------------------
     # MDA convenience (mirrors CMMCorePlus.run_mda)

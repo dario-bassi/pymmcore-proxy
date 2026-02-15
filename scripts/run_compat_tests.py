@@ -68,6 +68,7 @@ COMPAT_FILES = [
     "test_pixel_config_class.py",
     "test_adapter_class.py",
     "test_device_class.py",
+    "test_property_class.py",
     "test_slm_image.py",
     "test_accumulators.py",
     "test_core_references.py",
@@ -102,10 +103,8 @@ SKIP_TESTS: dict[str, str] = {
     "test_core": "isinstance(core, CMMCorePlus) check",
     # Proxy changes exception types and can't monkeypatch/capture server-side
     "test_search_paths": "os.getenv on client doesn't reflect server-side PATH changes",
-    "test_load_system_config": "FileNotFoundError wrapped as RuntimeError through proxy",
+    "test_load_system_config": "macOS /var symlink: server resolves to /private/var",
     "test_guess_channel_group": "uses patch.object on core",
-    "test_get_objectives": "sets Python property (objective_device_pattern) on proxy, not server",
-    "test_setContext": "context manager return value not serializable through proxy",
     "test_describe": "capsys can't capture server-side stdout",
     "test_set_autofocus_offset": "monkeypatch on internal _OFFSET_DEVICES dict",
     # Requires qtbot (Qt event loop)
@@ -115,8 +114,7 @@ SKIP_TESTS: dict[str, str] = {
     "test_register_mda_engine": "requires qtbot + local MDAEngine",
     "test_not_concurrent_mdas": "requires qtbot",
     "test_snap_signals": "requires qtbot",
-    # --- test_adapter_class.py ---
-    "test_adapter_object": "DeviceAdapter objects not serializable through proxy",
+    # --- test_adapter_class.py --- (test_adapter_object unskipped)
     # --- test_metadata_to_ome.py ---
     "test_ome_generation": "local_config.cfg not found (test creates own CMMCorePlus)",
     "test_ome_generation_from_events": "local_config.cfg not found (test creates own CMMCorePlus)",
@@ -180,8 +178,9 @@ class _AutoFlushCore:
     def __setattr__(self, name, value):
         setattr(self._client, name, value)
 
-    # Device wrappers must reference *this* object (not the underlying
-    # RemoteMMCore) so that ``device.core is core`` holds in tests.
+    # Wrapper objects must reference *this* object (not the underlying
+    # RemoteMMCore) so that ``obj.core is core`` holds in tests.
+
     def getDeviceObject(self, device_label, device_type=None):
         from pymmcore_plus import Device, DeviceType
         dt = device_type if device_type is not None else DeviceType.Any
@@ -213,6 +212,59 @@ class _AutoFlushCore:
                 yield self.getDeviceObject(dev)
             else:
                 yield dev
+
+    def getPropertyObject(self, device_label, property_name):
+        from pymmcore_plus import DeviceProperty
+        return DeviceProperty(device_label, property_name, self)
+
+    def iterProperties(self, property_type=None, property_name_pattern=None, *,
+                       device_type=None, device_label=None, has_limits=None,
+                       is_read_only=None, is_sequenceable=None, as_object=True):
+        return self._client.iterProperties(
+            property_type, property_name_pattern,
+            device_type=device_type, device_label=device_label,
+            has_limits=has_limits, is_read_only=is_read_only,
+            is_sequenceable=is_sequenceable, as_object=False,
+        ) if not as_object else (
+            self.getPropertyObject(dev, prop)
+            for dev, prop in self._client.iterProperties(
+                property_type, property_name_pattern,
+                device_type=device_type, device_label=device_label,
+                has_limits=has_limits, is_read_only=is_read_only,
+                is_sequenceable=is_sequenceable, as_object=False,
+            )
+        )
+
+    def getAdapterObject(self, library_name):
+        from pymmcore_plus import DeviceAdapter
+        return DeviceAdapter(library_name, mmcore=self)
+
+    def iterDeviceAdapters(self, adapter_pattern=None, *, as_object=True):
+        import re
+        adapters = list(self.getDeviceAdapterNames())
+        if adapter_pattern:
+            ptrn = (re.compile(adapter_pattern, re.IGNORECASE)
+                    if isinstance(adapter_pattern, str) else adapter_pattern)
+            adapters = [d for d in adapters if ptrn.search(d)]
+        for adapter in adapters:
+            if as_object:
+                yield self.getAdapterObject(adapter)
+            else:
+                yield adapter
+
+    def setContext(self, **kwargs):
+        return self._client.setContext(**kwargs)
+
+    @property
+    def objective_device_pattern(self):
+        return self._client.objective_device_pattern
+
+    @objective_device_pattern.setter
+    def objective_device_pattern(self, value):
+        self._client.objective_device_pattern = value
+
+    def guessObjectiveDevices(self):
+        return self._client.guessObjectiveDevices()
 
 
 def pytest_collection_modifyitems(config, items):
