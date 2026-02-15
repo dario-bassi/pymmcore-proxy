@@ -68,12 +68,9 @@ COMPAT_FILES = [
 
 SKIP_TESTS: dict[str, str] = {
     # --- test_events.py ---
-    # Uses devicePropertyChanged("Camera", "Gain") callable signal filter — proxy
-    # signals are plain psygnal.Signal, not the filtered CMMCorePlus variant.
-    "test_device_property_events": "devicePropertyChanged callable filter not supported",
-    # These check isinstance(signal, PSignalInstance) — proxy uses plain psygnal.Signal
-    "test_event_signatures": "isinstance(signal, PSignalInstance) check on proxy signals",
-    "test_deprecated_event_signatures": "isinstance + pytest.warns(FutureWarning) on proxy",
+    # Uses pytest.warns(FutureWarning) for deprecated signal signatures —
+    # this is a pymmcore-plus CMMCoreSignaler feature, not in plain psygnal.
+    "test_deprecated_event_signatures": "pymmcore-plus deprecated-signature FutureWarning",
     # These test CMMCorePlus/signaler internals, not proxy-relevant
     "test_signal_backend_selection": "tests CMMCorePlus signal backend selection internals",
     "test_events_protocols": "tests signaler class internals, not proxy-relevant",

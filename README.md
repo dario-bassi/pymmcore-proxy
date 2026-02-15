@@ -108,28 +108,19 @@ python scripts/run_compat_tests.py
 
 ## pymmcore-plus compatibility
 
-The compat test runner (`scripts/run_compat_tests.py`) runs pymmcore-plus's `test_events.py` and `test_mda.py` against `RemoteMMCore`. Out of 73 tests, **22 pass** and **51 are skipped** with documented reasons.
+The compat test runner (`scripts/run_compat_tests.py`) runs pymmcore-plus's `test_events.py` and `test_mda.py` against `RemoteMMCore`. Out of 73 tests, **47 pass** and **26 are skipped** with documented reasons.
 
 The skipped tests fall into a few categories — none represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
 
-### Signal type internals (3 tests)
+### CMMCorePlus internals (3 tests)
 
-These tests check pymmcore-plus signal internals that the proxy doesn't replicate.
-
-| Test | Reason |
-|---|---|
-| `test_device_property_events` | Uses `devicePropertyChanged("Camera", "Gain")` callable signal filter — proxy uses plain `psygnal.Signal` |
-| `test_event_signatures` (24 params) | Checks `isinstance(signal, PSignalInstance)` |
-| `test_deprecated_event_signatures` (2 params) | Checks `isinstance` + `pytest.warns(FutureWarning)` |
-
-### CMMCorePlus internals (2 tests)
-
-These test the signal backend selection and signaler protocol conformance — internal implementation details that don't exist on the proxy.
+These test signal backend selection, signaler protocol conformance, and deprecated-signature warnings — internal implementation details specific to CMMCorePlus.
 
 | Test | Reason |
 |---|---|
 | `test_signal_backend_selection` | Tests `CMMCoreSignaler` / `QCoreSignaler` selection logic |
 | `test_events_protocols` | Tests signaler class protocol conformance |
+| `test_deprecated_event_signatures` (2 params) | Tests `FutureWarning` on deprecated callback signatures |
 
 ### Requires Qt event loop (6 tests)
 
@@ -167,7 +158,7 @@ These tests use `MagicMock(wraps=engine)` or `patch.object()` to instrument the 
 |---|---|
 | `test_get_handlers` | Uses `weakref` on output handlers — doesn't work through proxy |
 
-### Tests that pass (22)
+### Tests that pass (47)
 
 These pymmcore-plus tests run correctly against `RemoteMMCore`. Event tests use the signal flush mechanism (`_AutoFlushCore` wrapper) to make async signal delivery appear synchronous. Server-side warnings are forwarded to clients via WebSocket.
 
@@ -176,6 +167,7 @@ These pymmcore-plus tests run correctly against `RemoteMMCore`. Event tests use 
 | `test_set_property_events` | `propertyChanged` fires on `setProperty` |
 | `test_set_state_events` | `propertyChanged` fires on `setState`/`setStateLabel` |
 | `test_set_statedevice_property_emits_events` | `propertyChanged` fires on state device property changes |
+| `test_device_property_events` | `devicePropertyChanged` callable filter routes by device/property |
 | `test_shutter_device_events` | `propertyChanged` fires on `setShutterOpen` |
 | `test_set_focus_device` | `propertyChanged` fires on `setFocusDevice` |
 | `test_sequence_acquisition_events` | Sequence acquisition start/stop signals fire |
@@ -184,6 +176,7 @@ These pymmcore-plus tests run correctly against `RemoteMMCore`. Event tests use 
 | `test_set_camera_roi_event` | `roiSet` fires on `setROI` |
 | `test_pixel_changed_event` | `pixelSizeChanged` fires on pixel config changes |
 | `test_set_channelgroup` | `channelGroupChanged` fires on `setChannelGroup` |
+| `test_event_signatures` (24 params) | All signal types satisfy `PSignalInstance` protocol |
 | `test_mda_waiting` | MDA with time intervals waits correctly |
 | `test_setting_position` | XY/Z positions are set during MDA |
 | `test_keep_shutter_open` | Shutter stays open across channels when configured |

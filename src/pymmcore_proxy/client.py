@@ -106,24 +106,70 @@ class _NestedProxy:
 class _CoreSignals:
     """Signals emitted by the microscope core (mirrors CMMCorePlus.events)."""
 
+    propertiesChanged = Signal()
     propertyChanged = Signal(object, object, object)
-    configSet = Signal(object, object)
-    exposureChanged = Signal(object, object)
+    channelGroupChanged = Signal(object)
+    configGroupChanged = Signal(object, object)
+    systemConfigurationLoaded = Signal()
+    pixelSizeChanged = Signal(object)
+    pixelSizeAffineChanged = Signal(object, object, object, object, object, object)
     stagePositionChanged = Signal(object, object)
     XYStagePositionChanged = Signal(object, object, object)
-    systemConfigurationLoaded = Signal()
-    autoShutterSet = Signal(object)
-    channelGroupChanged = Signal(object)
-    configDeleted = Signal(object, object)
-    configGroupDeleted = Signal(object)
-    configDefined = Signal(object, object, object, object, object)
-    roiSet = Signal(object, object, object, object, object)
-    pixelSizeChanged = Signal(object)
+    exposureChanged = Signal(object, object)
+    SLMExposureChanged = Signal(object, object)
+    configSet = Signal(object, object)
+    imageSnapped = Signal(object)
+    mdaEngineRegistered = Signal(object, object)
     continuousSequenceAcquisitionStarting = Signal()
     continuousSequenceAcquisitionStarted = Signal()
     sequenceAcquisitionStarting = Signal(object)
     sequenceAcquisitionStarted = Signal(object)
     sequenceAcquisitionStopped = Signal(object)
+    autoShutterSet = Signal(object)
+    configGroupDeleted = Signal(object)
+    configDeleted = Signal(object, object)
+    configDefined = Signal(object, object, object, object, object)
+    roiSet = Signal(object, object, object, object, object)
+
+
+class _DevicePropertySignal:
+    """Callable signal filter for device property changes.
+
+    Mirrors CMMCorePlus's ``devicePropertyChanged`` — a callable that
+    returns filtered signals:
+
+        core.events.devicePropertyChanged("Camera", "Gain").connect(cb)
+        core.events.devicePropertyChanged("Camera").connect(cb)
+
+    Internally listens to ``propertyChanged`` and routes matching events
+    to the appropriate filtered signal.
+    """
+
+    def __init__(self, core_signals: _CoreSignals):
+        self._cache: dict[tuple, Any] = {}
+        core_signals.propertyChanged.connect(self._on_property_changed)
+
+    def __call__(self, device: str, prop: str | None = None) -> Any:
+        key = (device, prop)
+        if key not in self._cache:
+            if prop is not None:
+                # device + property filter → emits (value,)
+                holder = type("_S", (), {"sig": Signal(object)})()
+            else:
+                # device-only filter → emits (property, value)
+                holder = type("_S", (), {"sig": Signal(object, object)})()
+            self._cache[key] = holder.sig
+        return self._cache[key]
+
+    def _on_property_changed(self, device: str, prop: str, value: str) -> None:
+        # Route to device + property specific signals
+        key = (device, prop)
+        if key in self._cache:
+            self._cache[key].emit(value)
+        # Route to device-only signals
+        key = (device, None)
+        if key in self._cache:
+            self._cache[key].emit(prop, value)
 
 
 class _MDASignals:
@@ -291,16 +337,19 @@ class _MDAController:
 # Maps "group.signal" → (signal_group_attr, signal_name)
 _SIGNAL_MAP: dict[str, tuple[str, str]] = {}
 for _name in [
-    "propertyChanged", "configSet", "exposureChanged",
-    "stagePositionChanged", "XYStagePositionChanged",
+    "propertiesChanged", "propertyChanged",
+    "channelGroupChanged", "configGroupChanged",
     "systemConfigurationLoaded",
-    "autoShutterSet", "channelGroupChanged",
-    "configDeleted", "configGroupDeleted", "configDefined",
-    "roiSet", "pixelSizeChanged",
+    "pixelSizeChanged", "pixelSizeAffineChanged",
+    "stagePositionChanged", "XYStagePositionChanged",
+    "exposureChanged", "SLMExposureChanged",
+    "configSet", "imageSnapped", "mdaEngineRegistered",
     "continuousSequenceAcquisitionStarting",
     "continuousSequenceAcquisitionStarted",
     "sequenceAcquisitionStarting", "sequenceAcquisitionStarted",
     "sequenceAcquisitionStopped",
+    "autoShutterSet", "configGroupDeleted",
+    "configDeleted", "configDefined", "roiSet",
 ]:
     _SIGNAL_MAP[f"events.{_name}"] = ("events", _name)
 for _name in [
@@ -346,6 +395,7 @@ class RemoteMMCore:
 
         # Local signal groups
         self.events = _CoreSignals()
+        self.events.devicePropertyChanged = _DevicePropertySignal(self.events)
         self.mda = _MDAController(self)
 
         # WebSocket signal listener
