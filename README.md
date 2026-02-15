@@ -88,6 +88,23 @@ Clients connect to `WS /signals` to receive real-time signal notifications. The 
 
 For streaming, events are sent one-by-one over a dedicated WebSocket. The server feeds them into a queue-backed iterator that the MDA runner consumes. Cancel is handled by injecting a sentinel into the queue directly from the `mda.cancel` RPC handler — no polling.
 
+### Custom MDA engines
+
+Custom MDA engines must be registered on the server side — they cannot be passed from the client since they are Python objects that need direct access to the hardware:
+
+```python
+# Server setup
+from pymmcore_plus import CMMCorePlus
+from pymmcore_proxy import serve
+
+core = CMMCorePlus()
+core.loadSystemConfiguration("MMConfig_Demo.cfg")
+core.mda.set_engine(MyCustomEngine(core))  # register before serving
+serve(core, port=5600)
+```
+
+Once registered, the custom engine is used transparently for all MDA runs initiated by any client. Engine properties can be read and written remotely via `core.mda.engine.<attr>`.
+
 ### Serialization
 
 All data crosses the wire as JSON. Custom types are tagged with `"__type__"`:
