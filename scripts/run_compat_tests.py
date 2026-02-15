@@ -68,6 +68,13 @@ COMPAT_FILES = [
     "test_pixel_config_class.py",
     "test_adapter_class.py",
     "test_slm_image.py",
+    "test_accumulators.py",
+    "test_core_references.py",
+    "test_install.py",
+    "test_ipy_completions.py",
+    "test_cli.py",
+    "test_metadata.py",
+    "test_metadata_to_ome.py",
 ]
 
 # ---------- incompatible tests with reasons ----------
@@ -109,6 +116,10 @@ SKIP_TESTS: dict[str, str] = {
     "test_snap_signals": "requires qtbot",
     # --- test_adapter_class.py ---
     "test_adapter_object": "DeviceAdapter objects not serializable through proxy",
+    # --- test_metadata_to_ome.py ---
+    "test_ome_generation": "local_config.cfg not found (test creates own CMMCorePlus)",
+    "test_ome_generation_from_events": "local_config.cfg not found (test creates own CMMCorePlus)",
+    "test_stupidly_empty_metadata": "requires lxml or xmlschema",
 }
 
 

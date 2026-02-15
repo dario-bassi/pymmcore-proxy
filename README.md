@@ -125,9 +125,19 @@ python scripts/run_compat_tests.py
 
 ## pymmcore-plus compatibility
 
-The compat test runner (`scripts/run_compat_tests.py`) runs 9 pymmcore-plus test files against `RemoteMMCore`. Out of 132 tests, **94 pass** and **37 are skipped** with documented reasons. Tests that don't use the `core` fixture (model, config group, misc, pixel config, SLM) run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
+The compat test runner (`scripts/run_compat_tests.py`) runs 16 of 21 pymmcore-plus test files against `RemoteMMCore`. Out of 211 tests, **161 pass** and **49 are skipped** with documented reasons. Tests that don't use the `core` fixture run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
 
 The skipped tests fall into a few categories — none represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
+
+### Test files not included (5 files)
+
+| File | Reason |
+|---|---|
+| `test_device_class.py` | `Device` wrapper objects need local core (`.wait()`, `.type`, `.properties`) |
+| `test_property_class.py` | `Property` wrapper objects need local core (`.isValid()`, `.name`) |
+| `test_sequencing.py` | Hardware sequencing internals + hangs without qtbot |
+| `test_bench.py` | Benchmarks, no functional tests |
+| `test_thread_relay.py` | Signal threading internals, no tests collected |
 
 ### Requires Qt event loop (12 tests)
 
@@ -165,7 +175,7 @@ The skipped tests fall into a few categories — none represent limitations of n
 | `test_describe` | `capsys` can't capture server stdout |
 | `test_adapter_object` | `DeviceAdapter` objects not serializable |
 
-### Proxy transport limitations (6 tests)
+### Proxy transport limitations (5 tests)
 
 | Test | Reason |
 |---|---|
@@ -174,6 +184,15 @@ The skipped tests fall into a few categories — none represent limitations of n
 | `test_get_objectives` | Python property set on client, not forwarded to server |
 | `test_setContext` | Context manager not serializable |
 | `test_get_handlers` | `weakref` on proxy objects |
+
+### Test environment limitations (8 tests)
+
+| Test | Reason |
+|---|---|
+| `test_ome_generation` (5 params) | `local_config.cfg` not found (test creates own CMMCorePlus) |
+| `test_ome_generation_from_events` | `local_config.cfg` not found (test creates own CMMCorePlus) |
+| `test_stupidly_empty_metadata` | Requires `lxml` or `xmlschema` |
+| `test_create_schema` | Requires `lxml` or `xmlschema` |
 
 ### CMMCorePlus internals (3 tests)
 
