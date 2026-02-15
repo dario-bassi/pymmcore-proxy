@@ -832,14 +832,13 @@ class RemoteMMCore:
     ) -> threading.Thread:
         """Run an MDA sequence on the server.
 
-        Returns a Thread whose .join() is a no-op (the MDA already ran
-        synchronously from the proxy's perspective).
+        Runs in a background thread so the caller (typically the Qt main
+        thread) stays responsive and can process incoming signals.
         """
-        self.mda.run(events)
-        # Return a "finished" thread so callers can do thread.join()
-        t = threading.Thread(target=lambda: None)
+        t = threading.Thread(target=self.mda.run, args=(events,), daemon=True)
         t.start()
-        t.join()
+        if block:
+            t.join()
         return t
 
     # ------------------------------------------------------------------

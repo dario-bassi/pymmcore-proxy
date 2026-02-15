@@ -56,11 +56,23 @@ def encode(obj: Any) -> Any:
 
     # useq MDAEvent and other pydantic models
     if hasattr(obj, "model_dump"):
+        data = obj.model_dump(mode="json")
+        # MDASequence.uid is excluded from model_dump by default, but we
+        # need it so the client can match frameReady events to the sequence
+        # that was announced via sequenceStarted.
+        if hasattr(obj, "uid") and "uid" not in data:
+            data["uid"] = str(obj.uid)
+        # Also preserve uid in the nested sequence inside MDAEvent.
+        seq = getattr(obj, "sequence", None)
+        if seq is not None and hasattr(seq, "uid"):
+            nested = data.get("sequence")
+            if isinstance(nested, dict) and "uid" not in nested:
+                nested["uid"] = str(seq.uid)
         return {
             "__type__": "model",
             "class": type(obj).__qualname__,
             "module": type(obj).__module__,
-            "data": obj.model_dump(mode="json"),
+            "data": data,
         }
 
     # pymmcore-plus Metadata → tagged dict of key-value pairs
@@ -197,15 +209,38 @@ def _reconstruct_model(obj: dict) -> Any:
     if cls_name == "MDASequence":
         try:
             from useq import MDASequence
-            return MDASequence(**data)
+
+            return _make_sequence(MDASequence, data)
         except Exception:
             pass
     if "useq" in module or cls_name == "MDAEvent":
         try:
-            from useq import MDAEvent
-            return MDAEvent(**data)
+            from useq import MDAEvent, MDASequence
+
+            event = MDAEvent(**data)
+            # Restore uid on the nested sequence if present
+            seq_data = data.get("sequence")
+            if event.sequence is not None and isinstance(seq_data, dict):
+                _restore_sequence_uid(event.sequence, seq_data)
+            return event
         except Exception:
             pass
 
     # Fallback: return the raw dict
     return data
+
+
+def _restore_sequence_uid(seq: Any, data: dict) -> None:
+    """Set _uid on an MDASequence from serialized data."""
+    uid_str = data.get("uid")
+    if uid_str:
+        from uuid import UUID
+
+        seq._uid = UUID(uid_str) if isinstance(uid_str, str) else uid_str
+
+
+def _make_sequence(cls: type, data: dict) -> Any:
+    """Create an MDASequence and restore its uid from serialized data."""
+    seq = cls(**data)
+    _restore_sequence_uid(seq, data)
+    return seq
