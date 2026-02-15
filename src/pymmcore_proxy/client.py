@@ -563,6 +563,70 @@ class RemoteMMCore:
             logger.warning("Error emitting %s: %s", key, e)
 
     # ------------------------------------------------------------------
+    # Device wrappers (created locally, delegate to RPC)
+    # ------------------------------------------------------------------
+
+    def getDeviceObject(self, device_label: str, device_type: Any = None) -> Any:
+        """Return a Device object bound to *device_label* on this core.
+
+        Creates a pymmcore-plus ``Device`` (or typed subclass) locally.
+        All device methods delegate to standard CMMCore API calls via RPC.
+        """
+        from pymmcore_plus import Device, DeviceType
+
+        dt = device_type if device_type is not None else DeviceType.Any
+        return Device.create(device_label, self, dt)
+
+    def iterDevices(
+        self,
+        device_type: Any = None,
+        device_label: Any = None,
+        device_adapter: Any = None,
+        *,
+        as_object: bool = True,
+    ) -> Any:
+        """Iterate over currently loaded devices.
+
+        Mirrors ``CMMCorePlus.iterDevices``.  When *as_object* is True
+        (the default), yields ``Device`` wrapper objects created locally.
+        """
+        import re
+
+        if device_type is None:
+            devices: list[str] = list(self._rpc("getLoadedDevices"))
+        elif isinstance(device_type, int):
+            devices = list(self._rpc("getLoadedDevicesOfType", device_type))
+        else:
+            _seen: set[str] = set()
+            for dt in device_type:
+                _seen.update(self._rpc("getLoadedDevicesOfType", dt))
+            devices = list(_seen)
+
+        if device_label:
+            ptrn = (
+                re.compile(device_label, re.IGNORECASE)
+                if isinstance(device_label, str)
+                else device_label
+            )
+            devices = [d for d in devices if ptrn.search(d)]
+
+        if device_adapter:
+            ptrn = (
+                re.compile(device_adapter, re.IGNORECASE)
+                if isinstance(device_adapter, str)
+                else device_adapter
+            )
+            devices = [
+                d for d in devices if ptrn.search(self._rpc("getDeviceLibrary", d))
+            ]
+
+        for dev in devices:
+            if as_object:
+                yield self.getDeviceObject(dev)
+            else:
+                yield dev
+
+    # ------------------------------------------------------------------
     # MDA convenience (mirrors CMMCorePlus.run_mda)
     # ------------------------------------------------------------------
 
@@ -585,18 +649,29 @@ class RemoteMMCore:
     # Lifecycle
     # ------------------------------------------------------------------
 
+    _flush_counter = 0
+
     def flush_signals(self, timeout: float = 5.0) -> None:
         """Block until all pending signals have been delivered.
 
         Sends a flush request to the server, which responds with a marker
         over the signal WebSocket.  Since WS messages are ordered, the
         marker arrives after all previously queued signals.
+
+        The flush_id is generated client-side and registered BEFORE the
+        HTTP request to avoid a race where the WebSocket marker arrives
+        before the Event is registered.
         """
-        resp = self._http.get("/signals/flush")
-        resp.raise_for_status()
-        flush_id = resp.json().get("id", "")
+        RemoteMMCore._flush_counter += 1
+        flush_id = f"f{RemoteMMCore._flush_counter}"
         ev = threading.Event()
         self._flush_events[flush_id] = ev
+        try:
+            resp = self._http.get(f"/signals/flush?id={flush_id}")
+            resp.raise_for_status()
+        except Exception:
+            self._flush_events.pop(flush_id, None)
+            return
         ev.wait(timeout=timeout)
         self._flush_events.pop(flush_id, None)
 

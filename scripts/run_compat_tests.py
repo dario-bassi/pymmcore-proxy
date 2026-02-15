@@ -67,6 +67,7 @@ COMPAT_FILES = [
     "test_misc.py",
     "test_pixel_config_class.py",
     "test_adapter_class.py",
+    "test_device_class.py",
     "test_slm_image.py",
     "test_accumulators.py",
     "test_core_references.py",
@@ -178,6 +179,40 @@ class _AutoFlushCore:
 
     def __setattr__(self, name, value):
         setattr(self._client, name, value)
+
+    # Device wrappers must reference *this* object (not the underlying
+    # RemoteMMCore) so that ``device.core is core`` holds in tests.
+    def getDeviceObject(self, device_label, device_type=None):
+        from pymmcore_plus import Device, DeviceType
+        dt = device_type if device_type is not None else DeviceType.Any
+        return Device.create(device_label, self, dt)
+
+    def iterDevices(self, device_type=None, device_label=None,
+                    device_adapter=None, *, as_object=True):
+        import re
+        if device_type is None:
+            devices = list(self.getLoadedDevices())
+        elif isinstance(device_type, int):
+            devices = list(self.getLoadedDevicesOfType(device_type))
+        else:
+            _seen = set()
+            for dt in device_type:
+                _seen.update(self.getLoadedDevicesOfType(dt))
+            devices = list(_seen)
+        if device_label:
+            ptrn = (re.compile(device_label, re.IGNORECASE)
+                    if isinstance(device_label, str) else device_label)
+            devices = [d for d in devices if ptrn.search(d)]
+        if device_adapter:
+            ptrn = (re.compile(device_adapter, re.IGNORECASE)
+                    if isinstance(device_adapter, str) else device_adapter)
+            devices = [d for d in devices
+                       if ptrn.search(self.getDeviceLibrary(d))]
+        for dev in devices:
+            if as_object:
+                yield self.getDeviceObject(dev)
+            else:
+                yield dev
 
 
 def pytest_collection_modifyitems(config, items):

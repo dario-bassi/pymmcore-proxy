@@ -198,7 +198,7 @@ class ProxyServer:
         the marker.
         """
         await asyncio.sleep(0)
-        flush_id = str(time.monotonic())
+        flush_id = request.query_params.get("id", str(time.monotonic()))
         msg = json.dumps({
             "group": "_internal",
             "signal": "_flush",
