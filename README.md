@@ -1,6 +1,8 @@
 # pymmcore-proxy
 
-Network proxy for [pymmcore-plus](https://github.com/pymmcore-plus/pymmcore-plus) — control microscopes remotely over HTTP and WebSocket.
+> **Warning:** This project is experimental and under active development. APIs may change without notice.
+
+Network proxy for [pymmcore-plus](https://github.com/pymmcore-plus/pymmcore-plus): control microscopes remotely over HTTP and WebSocket.
 
 The server wraps a `CMMCorePlus` instance and exposes it over the network. The client (`RemoteMMCore`) is a drop-in replacement that forwards all calls via RPC. Signals (property changes, MDA frame events, etc.) stream back to clients over WebSocket in real time.
 
@@ -127,7 +129,7 @@ python scripts/run_compat_tests.py
 
 The compat test runner (`scripts/run_compat_tests.py`) runs 18 of 21 pymmcore-plus test files against `RemoteMMCore`. Out of 233 tests, **186 pass** and **46 are skipped** with documented reasons. Tests that don't use the `core` fixture run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
 
-The skipped tests fall into a few categories — none represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
+The skipped tests fall into a few categories, none should represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
 
 ### Test files not included (3 files)
 
