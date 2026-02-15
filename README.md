@@ -125,7 +125,7 @@ python scripts/run_compat_tests.py
 
 ## pymmcore-plus compatibility
 
-The compat test runner (`scripts/run_compat_tests.py`) runs pymmcore-plus's `test_events.py` and `test_mda.py` against `RemoteMMCore`. Out of 73 tests, **47 pass** and **26 are skipped** with documented reasons.
+The compat test runner (`scripts/run_compat_tests.py`) runs pymmcore-plus's `test_events.py` and `test_mda.py` against `RemoteMMCore`. Out of 73 tests, **52 pass** and **21 are skipped** with documented reasons.
 
 The skipped tests fall into a few categories — none represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
 
@@ -163,19 +163,13 @@ These tests use `MagicMock(wraps=engine)` or `patch.object()` to instrument the 
 | `test_engine_protocol` | Passes a local `MyEngine` class to remote server |
 | `test_queue_mda` | `MagicMock(wraps=engine)` to remote server |
 
-### Can't capture server-side logs (1 test)
-
-| Test | Reason |
-|---|---|
-| `test_mda_no_device` (5 params) | `caplog` flooded with httpcore debug logs |
-
 ### Other (1 test)
 
 | Test | Reason |
 |---|---|
 | `test_get_handlers` | Uses `weakref` on output handlers — doesn't work through proxy |
 
-### Tests that pass (47)
+### Tests that pass (52)
 
 These pymmcore-plus tests run correctly against `RemoteMMCore`. Event tests use the signal flush mechanism (`_AutoFlushCore` wrapper) to make async signal delivery appear synchronous. Server-side warnings are forwarded to clients via WebSocket.
 
@@ -200,4 +194,5 @@ These pymmcore-plus tests run correctly against `RemoteMMCore`. Event tests use 
 | `test_reset_event_timer` | Event timer resets between MDA events |
 | `test_custom_action` | Custom action events are handled |
 | `test_restore_initial_state` (3 params) | Hardware state restored after MDA (with `pytest.warns` for unknown focus direction) |
+| `test_mda_no_device` (5 params) | MDA engine gracefully handles missing devices (caplog captures server-side logs) |
 | `test_restore_initial_state_enabled_by_default` (3 params) | State restoration auto-enabled based on `FocusDirection` |

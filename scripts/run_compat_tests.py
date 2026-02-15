@@ -90,8 +90,6 @@ SKIP_TESTS: dict[str, str] = {
     "test_queue_mda": "can't pass MagicMock(wraps=engine) to remote server",
     # Uses weakref on output handlers — doesn't work through proxy
     "test_get_handlers": "weakref on proxy output handlers not supported",
-    # caplog captures httpcore/httpx debug output, obscuring the pymmcore-plus log
-    "test_mda_no_device": "caplog flooded with httpcore debug logs",
 }
 
 
@@ -228,6 +226,11 @@ def core(_server_url) -> Iterator[Any]:
         client._rpc_setattr("mda.engine.restore_initial_state", None)
     except Exception:
         pass
+    # Reset cached config so _set_event_channel always calls setConfig
+    try:
+        client._rpc_setattr("_last_config", ("", ""))
+    except Exception:
+        pass
     yield _AutoFlushCore(client)
     client.close()
 
@@ -247,7 +250,11 @@ def mock_fullfocus_failure():
 @pytest.fixture
 def caplog(caplog):
     """Provide caplog — redirect pymmcore-plus logger to it."""
+    import logging as _logging
     from pymmcore_plus._logger import logger
+    # Suppress noisy HTTP debug logs that flood caplog
+    for name in ("httpcore", "httpx", "websockets"):
+        _logging.getLogger(name).setLevel(_logging.WARNING)
     logger.addHandler(caplog.handler)
     try:
         yield caplog
