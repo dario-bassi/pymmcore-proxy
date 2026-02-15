@@ -61,6 +61,13 @@ def _find_pmp_tests() -> Path:
 COMPAT_FILES = [
     "test_events.py",
     "test_mda.py",
+    "test_core.py",
+    "test_model.py",
+    "test_config_group_class.py",
+    "test_misc.py",
+    "test_pixel_config_class.py",
+    "test_adapter_class.py",
+    "test_slm_image.py",
 ]
 
 # ---------- incompatible tests with reasons ----------
@@ -68,28 +75,47 @@ COMPAT_FILES = [
 
 SKIP_TESTS: dict[str, str] = {
     # --- test_events.py ---
-    # Uses pytest.warns(FutureWarning) for deprecated signal signatures —
-    # this is a pymmcore-plus CMMCoreSignaler feature, not in plain psygnal.
     "test_deprecated_event_signatures": "pymmcore-plus deprecated-signature FutureWarning",
-    # These test CMMCorePlus/signaler internals, not proxy-relevant
     "test_signal_backend_selection": "tests CMMCorePlus signal backend selection internals",
     "test_events_protocols": "tests signaler class internals, not proxy-relevant",
     # --- test_mda.py ---
-    # Requires qtbot (Qt event loop)
     "test_mda_failures": "requires qtbot + patch.object on remote engine",
     "test_autofocus": "requires qtbot + mock_fullfocus (can't monkeypatch remote)",
     "test_autofocus_relative_z_plan": "requires mock_fullfocus + weakref on proxy",
     "test_autofocus_retries": "requires mock_fullfocus_failure fixture",
     "test_set_mda_fov": "requires qtbot",
     "test_mda_iterable_of_events": "requires qtbot",
-    # These use MagicMock(wraps=engine) + set_engine() + qtbot — can't mock remote engine
     "test_runner_cancel": "MagicMock wrapping of remote engine + qtbot",
     "test_runner_pause": "MagicMock wrapping of remote engine + qtbot",
-    # Requires passing local Python objects (MagicMock engines) to server
     "test_engine_protocol": "can't pass local MyEngine to remote server",
     "test_queue_mda": "can't pass MagicMock(wraps=engine) to remote server",
-    # Uses weakref on output handlers — doesn't work through proxy
     "test_get_handlers": "weakref on proxy output handlers not supported",
+    # --- test_core.py ---
+    # isinstance checks fail (proxy returns serialized values, not original types)
+    "test_core": "isinstance(core, CMMCorePlus) check",
+    "test_device_type_overrides": "isinstance(dt, DeviceType) — enums not reconstructed",
+    "test_property_type_overrides": "isinstance(pt, PropertyType) — enums not reconstructed",
+    "test_detect_device": "isinstance(dds, DeviceDetectionStatus)",
+    "test_metadata": "isinstance(md, Metadata) — Metadata not reconstructed",
+    "test_get_image_and_meta": "isinstance(md, Metadata)",
+    "test_configuration": "isinstance(state, Configuration) — Configuration not reconstructed",
+    # Proxy changes exception types and can't monkeypatch/capture server-side
+    "test_search_paths": "os.getenv on client doesn't reflect server-side PATH changes",
+    "test_load_system_config": "FileNotFoundError wrapped as RuntimeError through proxy",
+    "test_guess_channel_group": "uses patch.object on core",
+    "test_get_objectives": "sets Python property (objective_device_pattern) on proxy, not server",
+    "test_setContext": "context manager return value not serializable through proxy",
+    "test_describe": "capsys can't capture server-side stdout",
+    "test_set_autofocus_offset": "monkeypatch on internal _OFFSET_DEVICES dict",
+    # Requires qtbot (Qt event loop)
+    "test_cb_exceptions": "requires qtbot",
+    "test_mda": "requires qtbot + MagicMock signal assertions",
+    "test_mda_pause_cancel": "requires qtbot",
+    "test_register_mda_engine": "requires qtbot + local MDAEngine",
+    "test_not_concurrent_mdas": "requires qtbot",
+    "test_snap_signals": "requires qtbot",
+    # --- test_adapter_class.py ---
+    "test_adapter_object": "DeviceAdapter objects not serializable through proxy",
 }
 
 

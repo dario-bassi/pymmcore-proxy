@@ -125,74 +125,68 @@ python scripts/run_compat_tests.py
 
 ## pymmcore-plus compatibility
 
-The compat test runner (`scripts/run_compat_tests.py`) runs pymmcore-plus's `test_events.py` and `test_mda.py` against `RemoteMMCore`. Out of 73 tests, **52 pass** and **21 are skipped** with documented reasons.
+The compat test runner (`scripts/run_compat_tests.py`) runs 9 pymmcore-plus test files against `RemoteMMCore`. Out of 132 tests, **88 pass** and **43 are skipped** with documented reasons. Tests that don't use the `core` fixture (model, config group, misc, pixel config, SLM) run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
 
 The skipped tests fall into a few categories — none represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
 
+### Requires Qt event loop (12 tests)
+
+| Test | File |
+|---|---|
+| `test_cb_exceptions` | test_core.py |
+| `test_mda` | test_core.py |
+| `test_mda_pause_cancel` | test_core.py |
+| `test_register_mda_engine` | test_core.py |
+| `test_not_concurrent_mdas` | test_core.py |
+| `test_snap_signals` | test_core.py |
+| `test_mda_failures` | test_mda.py |
+| `test_autofocus` | test_mda.py |
+| `test_autofocus_relative_z_plan` | test_mda.py |
+| `test_autofocus_retries` | test_mda.py |
+| `test_set_mda_fov` | test_mda.py |
+| `test_mda_iterable_of_events` (3 params) | test_mda.py |
+
+### isinstance checks fail through proxy (7 tests)
+
+Return types like `DeviceType`, `PropertyType`, `Metadata`, `Configuration` are serialized to basic types. `isinstance()` checks fail.
+
+| Test | Expected type |
+|---|---|
+| `test_core` | `CMMCorePlus`, `CMMCore` |
+| `test_device_type_overrides` | `DeviceType` |
+| `test_property_type_overrides` | `PropertyType` |
+| `test_detect_device` | `DeviceDetectionStatus` |
+| `test_metadata` | `Metadata` |
+| `test_get_image_and_meta` | `Metadata` |
+| `test_configuration` | `Configuration` |
+
+### Can't mock/monkeypatch remote objects (8 tests)
+
+| Test | Reason |
+|---|---|
+| `test_guess_channel_group` | `patch.object` on core |
+| `test_set_autofocus_offset` | `monkeypatch` on internal dict |
+| `test_runner_cancel` | `MagicMock(wraps=engine)` |
+| `test_runner_pause` | `MagicMock(wraps=engine)` |
+| `test_engine_protocol` | Passes local `MyEngine` to server |
+| `test_queue_mda` | `MagicMock(wraps=engine)` |
+| `test_describe` | `capsys` can't capture server stdout |
+| `test_adapter_object` | `DeviceAdapter` objects not serializable |
+
+### Proxy transport limitations (6 tests)
+
+| Test | Reason |
+|---|---|
+| `test_search_paths` | `os.getenv` on client doesn't reflect server-side PATH |
+| `test_load_system_config` | `FileNotFoundError` wrapped as `RuntimeError` |
+| `test_get_objectives` | Python property set on client, not forwarded to server |
+| `test_setContext` | Context manager not serializable |
+| `test_get_handlers` | `weakref` on proxy objects |
+
 ### CMMCorePlus internals (3 tests)
 
-These test signal backend selection, signaler protocol conformance, and deprecated-signature warnings — internal implementation details specific to CMMCorePlus.
-
 | Test | Reason |
 |---|---|
-| `test_signal_backend_selection` | Tests `CMMCoreSignaler` / `QCoreSignaler` selection logic |
-| `test_events_protocols` | Tests signaler class protocol conformance |
-| `test_deprecated_event_signatures` (2 params) | Tests `FutureWarning` on deprecated callback signatures |
-
-### Requires Qt event loop (6 tests)
-
-These tests use `qtbot` (pytest-qt) to process events. The proxy doesn't require or use Qt.
-
-| Test | Additional blocker |
-|---|---|
-| `test_mda_failures` | Also needs `patch.object` on remote engine |
-| `test_autofocus` | Also needs `mock_fullfocus` fixture |
-| `test_autofocus_relative_z_plan` | Also needs `mock_fullfocus` |
-| `test_autofocus_retries` | Also needs `mock_fullfocus_failure` |
-| `test_set_mda_fov` | |
-| `test_mda_iterable_of_events` (3 params) | |
-
-### Can't mock/monkeypatch remote objects (4 tests)
-
-These tests use `MagicMock(wraps=engine)` or `patch.object()` to instrument the MDA engine. This can't work through a network proxy — the engine lives on the server.
-
-| Test | Reason |
-|---|---|
-| `test_runner_cancel` | `MagicMock(wraps=engine)` + qtbot |
-| `test_runner_pause` | `MagicMock(wraps=engine)` + qtbot |
-| `test_engine_protocol` | Passes a local `MyEngine` class to remote server |
-| `test_queue_mda` | `MagicMock(wraps=engine)` to remote server |
-
-### Other (1 test)
-
-| Test | Reason |
-|---|---|
-| `test_get_handlers` | Uses `weakref` on output handlers — doesn't work through proxy |
-
-### Tests that pass (52)
-
-These pymmcore-plus tests run correctly against `RemoteMMCore`. Event tests use the signal flush mechanism (`_AutoFlushCore` wrapper) to make async signal delivery appear synchronous. Server-side warnings are forwarded to clients via WebSocket.
-
-| Test | What it verifies |
-|---|---|
-| `test_set_property_events` | `propertyChanged` fires on `setProperty` |
-| `test_set_state_events` | `propertyChanged` fires on `setState`/`setStateLabel` |
-| `test_set_statedevice_property_emits_events` | `propertyChanged` fires on state device property changes |
-| `test_device_property_events` | `devicePropertyChanged` callable filter routes by device/property |
-| `test_shutter_device_events` | `propertyChanged` fires on `setShutterOpen` |
-| `test_set_focus_device` | `propertyChanged` fires on `setFocusDevice` |
-| `test_sequence_acquisition_events` | Sequence acquisition start/stop signals fire |
-| `test_autoshutter_device_events` | `autoShutterSet` fires on `setAutoShutter` |
-| `test_groups_and_presets_events` | `configDeleted`/`configGroupDeleted`/`configDefined` fire |
-| `test_set_camera_roi_event` | `roiSet` fires on `setROI` |
-| `test_pixel_changed_event` | `pixelSizeChanged` fires on pixel config changes |
-| `test_set_channelgroup` | `channelGroupChanged` fires on `setChannelGroup` |
-| `test_event_signatures` (24 params) | All signal types satisfy `PSignalInstance` protocol |
-| `test_mda_waiting` | MDA with time intervals waits correctly |
-| `test_setting_position` | XY/Z positions are set during MDA |
-| `test_keep_shutter_open` | Shutter stays open across channels when configured |
-| `test_reset_event_timer` | Event timer resets between MDA events |
-| `test_custom_action` | Custom action events are handled |
-| `test_restore_initial_state` (3 params) | Hardware state restored after MDA (with `pytest.warns` for unknown focus direction) |
-| `test_mda_no_device` (5 params) | MDA engine gracefully handles missing devices (caplog captures server-side logs) |
-| `test_restore_initial_state_enabled_by_default` (3 params) | State restoration auto-enabled based on `FocusDirection` |
+| `test_signal_backend_selection` | Signal backend selection logic |
+| `test_events_protocols` | Signaler protocol conformance |
+| `test_deprecated_event_signatures` (2 params) | Deprecated-signature `FutureWarning` |
