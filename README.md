@@ -125,7 +125,7 @@ python scripts/run_compat_tests.py
 
 ## pymmcore-plus compatibility
 
-The compat test runner (`scripts/run_compat_tests.py`) runs 9 pymmcore-plus test files against `RemoteMMCore`. Out of 132 tests, **88 pass** and **43 are skipped** with documented reasons. Tests that don't use the `core` fixture (model, config group, misc, pixel config, SLM) run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
+The compat test runner (`scripts/run_compat_tests.py`) runs 9 pymmcore-plus test files against `RemoteMMCore`. Out of 132 tests, **94 pass** and **37 are skipped** with documented reasons. Tests that don't use the `core` fixture (model, config group, misc, pixel config, SLM) run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
 
 The skipped tests fall into a few categories — none represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
 
@@ -146,19 +146,11 @@ The skipped tests fall into a few categories — none represent limitations of n
 | `test_set_mda_fov` | test_mda.py |
 | `test_mda_iterable_of_events` (3 params) | test_mda.py |
 
-### isinstance checks fail through proxy (7 tests)
+### isinstance check on core object (1 test)
 
-Return types like `DeviceType`, `PropertyType`, `Metadata`, `Configuration` are serialized to basic types. `isinstance()` checks fail.
-
-| Test | Expected type |
+| Test | Reason |
 |---|---|
-| `test_core` | `CMMCorePlus`, `CMMCore` |
-| `test_device_type_overrides` | `DeviceType` |
-| `test_property_type_overrides` | `PropertyType` |
-| `test_detect_device` | `DeviceDetectionStatus` |
-| `test_metadata` | `Metadata` |
-| `test_get_image_and_meta` | `Metadata` |
-| `test_configuration` | `Configuration` |
+| `test_core` | `isinstance(core, CMMCorePlus)` — `RemoteMMCore` is not a `CMMCorePlus` subclass |
 
 ### Can't mock/monkeypatch remote objects (8 tests)
 

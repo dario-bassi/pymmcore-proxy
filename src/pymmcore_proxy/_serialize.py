@@ -15,6 +15,15 @@ import numpy as np
 
 def encode(obj: Any) -> Any:
     """Encode a Python object into a JSON-safe representation."""
+    # Enums before basic types — IntEnum is also int, would be caught below
+    if isinstance(obj, enum.Enum):
+        return {
+            "__type__": "enum",
+            "class": type(obj).__qualname__,
+            "module": type(obj).__module__,
+            "value": obj.value,
+        }
+
     if obj is None or isinstance(obj, (bool, int, float, str)):
         return obj
 
@@ -45,9 +54,6 @@ def encode(obj: Any) -> Any:
     if isinstance(obj, bytes):
         return {"__type__": "bytes", "data": base64.b64encode(obj).decode("ascii")}
 
-    if isinstance(obj, enum.Enum):
-        return {"__type__": "enum", "class": type(obj).__qualname__, "value": obj.value}
-
     # useq MDAEvent and other pydantic models
     if hasattr(obj, "model_dump"):
         return {
@@ -57,7 +63,33 @@ def encode(obj: Any) -> Any:
             "data": obj.model_dump(mode="json"),
         }
 
-    # Generic iterable fallback (handles pymmcore Configuration, PropertySetting, etc.)
+    # pymmcore-plus Metadata → tagged dict of key-value pairs
+    cls_name = type(obj).__name__
+    cls_module = getattr(type(obj), "__module__", "")
+    if cls_name == "Metadata" and hasattr(obj, "GetKeys"):
+        try:
+            return {"__type__": "metadata", "data": dict(obj)}
+        except Exception:
+            pass
+
+    # pymmcore-plus Configuration → tagged list of (device, prop, value) triples
+    if cls_name == "Configuration" and hasattr(obj, "getSetting"):
+        try:
+            items = []
+            for i in range(obj.size()):
+                ps = obj.getSetting(i)
+                items.append(
+                    [ps.getDeviceLabel(), ps.getPropertyName(), ps.getPropertyValue()]
+                )
+            return {
+                "__type__": "configuration",
+                "plus": "pymmcore_plus" in cls_module,
+                "data": items,
+            }
+        except Exception:
+            pass
+
+    # Generic iterable fallback
     if not isinstance(obj, (str, bytes)) and hasattr(obj, "__iter__"):
         try:
             return [encode(x) for x in obj]
@@ -93,13 +125,66 @@ def decode(obj: Any) -> Any:
             return _reconstruct_model(obj)
 
         if t == "enum":
-            # Return raw value — caller can cast if needed
-            return obj["value"]
+            return _reconstruct_enum(obj)
+
+        if t == "metadata":
+            return _reconstruct_metadata(obj)
+
+        if t == "configuration":
+            return _reconstruct_configuration(obj)
 
         # Plain dict
         return {k: decode(v) for k, v in obj.items()}
 
     return obj
+
+
+def _reconstruct_enum(obj: dict) -> Any:
+    """Reconstruct an enum from serialized form, falling back to raw value."""
+    value = obj["value"]
+    module = obj.get("module", "")
+    cls_name = obj.get("class", "")
+    if module and cls_name:
+        try:
+            import importlib
+
+            mod = importlib.import_module(module)
+            cls = getattr(mod, cls_name)
+            return cls(value)
+        except Exception:
+            pass
+    return value
+
+
+def _reconstruct_metadata(obj: dict) -> Any:
+    """Reconstruct a pymmcore-plus Metadata from serialized key-value pairs."""
+    data = obj.get("data", {})
+    try:
+        from pymmcore_plus.core._metadata import Metadata
+
+        return Metadata(data)
+    except Exception:
+        return data
+
+
+def _reconstruct_configuration(obj: dict) -> Any:
+    """Reconstruct a pymmcore Configuration from serialized settings."""
+    data = obj.get("data", [])
+    is_plus = obj.get("plus", True)
+    try:
+        import pymmcore as _pymmcore
+
+        if is_plus:
+            from pymmcore_plus.core._config import Configuration
+
+            cfg = Configuration()
+        else:
+            cfg = _pymmcore.Configuration()
+        for device, prop, value in data:
+            cfg.addSetting(_pymmcore.PropertySetting(device, prop, value))
+        return cfg
+    except Exception:
+        return data
 
 
 def _reconstruct_model(obj: dict) -> Any:

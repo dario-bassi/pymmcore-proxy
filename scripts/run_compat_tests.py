@@ -91,14 +91,7 @@ SKIP_TESTS: dict[str, str] = {
     "test_queue_mda": "can't pass MagicMock(wraps=engine) to remote server",
     "test_get_handlers": "weakref on proxy output handlers not supported",
     # --- test_core.py ---
-    # isinstance checks fail (proxy returns serialized values, not original types)
     "test_core": "isinstance(core, CMMCorePlus) check",
-    "test_device_type_overrides": "isinstance(dt, DeviceType) — enums not reconstructed",
-    "test_property_type_overrides": "isinstance(pt, PropertyType) — enums not reconstructed",
-    "test_detect_device": "isinstance(dds, DeviceDetectionStatus)",
-    "test_metadata": "isinstance(md, Metadata) — Metadata not reconstructed",
-    "test_get_image_and_meta": "isinstance(md, Metadata)",
-    "test_configuration": "isinstance(state, Configuration) — Configuration not reconstructed",
     # Proxy changes exception types and can't monkeypatch/capture server-side
     "test_search_paths": "os.getenv on client doesn't reflect server-side PATH changes",
     "test_load_system_config": "FileNotFoundError wrapped as RuntimeError through proxy",
