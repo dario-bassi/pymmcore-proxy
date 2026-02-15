@@ -125,15 +125,14 @@ python scripts/run_compat_tests.py
 
 ## pymmcore-plus compatibility
 
-The compat test runner (`scripts/run_compat_tests.py`) runs 16 of 21 pymmcore-plus test files against `RemoteMMCore`. Out of 211 tests, **161 pass** and **49 are skipped** with documented reasons. Tests that don't use the `core` fixture run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
+The compat test runner (`scripts/run_compat_tests.py`) runs 17 of 21 pymmcore-plus test files against `RemoteMMCore`. Out of 229 tests, **179 pass** and **49 are skipped** with documented reasons. Tests that don't use the `core` fixture run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
 
 The skipped tests fall into a few categories — none represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
 
-### Test files not included (5 files)
+### Test files not included (4 files)
 
 | File | Reason |
 |---|---|
-| `test_device_class.py` | `Device` wrapper objects need local core (`.wait()`, `.type`, `.properties`) |
 | `test_property_class.py` | `Property` wrapper objects need local core (`.isValid()`, `.name`) |
 | `test_sequencing.py` | Hardware sequencing internals + hangs without qtbot |
 | `test_bench.py` | Benchmarks, no functional tests |
