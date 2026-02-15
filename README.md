@@ -125,15 +125,14 @@ python scripts/run_compat_tests.py
 
 ## pymmcore-plus compatibility
 
-The compat test runner (`scripts/run_compat_tests.py`) runs 17 of 21 pymmcore-plus test files against `RemoteMMCore`. Out of 229 tests, **179 pass** and **49 are skipped** with documented reasons. Tests that don't use the `core` fixture run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
+The compat test runner (`scripts/run_compat_tests.py`) runs 18 of 21 pymmcore-plus test files against `RemoteMMCore`. Out of 233 tests, **186 pass** and **46 are skipped** with documented reasons. Tests that don't use the `core` fixture run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
 
 The skipped tests fall into a few categories — none represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
 
-### Test files not included (4 files)
+### Test files not included (3 files)
 
 | File | Reason |
 |---|---|
-| `test_property_class.py` | `Property` wrapper objects need local core (`.isValid()`, `.name`) |
 | `test_sequencing.py` | Hardware sequencing internals + hangs without qtbot |
 | `test_bench.py` | Benchmarks, no functional tests |
 | `test_thread_relay.py` | Signal threading internals, no tests collected |
@@ -161,7 +160,7 @@ The skipped tests fall into a few categories — none represent limitations of n
 |---|---|
 | `test_core` | `isinstance(core, CMMCorePlus)` — `RemoteMMCore` is not a `CMMCorePlus` subclass |
 
-### Can't mock/monkeypatch remote objects (8 tests)
+### Can't mock/monkeypatch remote objects (7 tests)
 
 | Test | Reason |
 |---|---|
@@ -172,16 +171,13 @@ The skipped tests fall into a few categories — none represent limitations of n
 | `test_engine_protocol` | Passes local `MyEngine` to server |
 | `test_queue_mda` | `MagicMock(wraps=engine)` |
 | `test_describe` | `capsys` can't capture server stdout |
-| `test_adapter_object` | `DeviceAdapter` objects not serializable |
 
-### Proxy transport limitations (5 tests)
+### Proxy transport limitations (3 tests)
 
 | Test | Reason |
 |---|---|
 | `test_search_paths` | `os.getenv` on client doesn't reflect server-side PATH |
-| `test_load_system_config` | `FileNotFoundError` wrapped as `RuntimeError` |
-| `test_get_objectives` | Python property set on client, not forwarded to server |
-| `test_setContext` | Context manager not serializable |
+| `test_load_system_config` | macOS `/var` symlink: server resolves to `/private/var` |
 | `test_get_handlers` | `weakref` on proxy objects |
 
 ### Test environment limitations (8 tests)
