@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import queue
+import threading
 import time
 import warnings
 from typing import Any
@@ -97,6 +98,8 @@ class ProxyServer:
         self._ws_clients: set[WebSocket] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream_queue: queue.Queue | None = None
+        self._stream_lock = threading.Lock()
+        self._stats_lock = threading.Lock()
         self._start_time = time.time()
         self._command_count = 0
         self._recent_commands: list[dict] = []
@@ -219,10 +222,11 @@ class ProxyServer:
         })
 
     def _record_command(self, method: str):
-        self._command_count += 1
-        self._recent_commands.append({"t": time.time(), "method": method})
-        if len(self._recent_commands) > 50:
-            self._recent_commands = self._recent_commands[-50:]
+        with self._stats_lock:
+            self._command_count += 1
+            self._recent_commands.append({"t": time.time(), "method": method})
+            if len(self._recent_commands) > 50:
+                self._recent_commands = self._recent_commands[-50:]
 
     def _resolve_dotted(self, path: str) -> Any:
         """Resolve a dotted path like 'mda.engine.setup_event' on the core."""
@@ -264,9 +268,13 @@ class ProxyServer:
             func = self._resolve_dotted(method)
             result = await asyncio.to_thread(func, *args, **kwargs)
 
-            # Unblock streaming iterator immediately on cancel
-            if method == "mda.cancel" and self._stream_queue is not None:
-                self._stream_queue.put(None)
+            # Unblock streaming iterator immediately on cancel.
+            # Snapshot _stream_queue without the lock to avoid deadlock
+            # (the streaming handler holds _stream_lock while waiting).
+            if method == "mda.cancel":
+                q = self._stream_queue
+                if q is not None:
+                    q.put(None)
 
             return JSONResponse({"ok": True, "value": encode(result)})
         except Exception as e:
@@ -282,7 +290,7 @@ class ProxyServer:
         self._record_command("mda.exec_event")
 
         try:
-            result = self._execute_event(event_data)
+            result = await asyncio.to_thread(self._execute_event, event_data)
             return JSONResponse({"ok": True, "value": encode(result)})
         except Exception as e:
             return JSONResponse(
@@ -357,6 +365,16 @@ class ProxyServer:
             await websocket.close()
             return
 
+        # Only one streaming MDA at a time
+        acquired = self._stream_lock.acquire(blocking=False)
+        if not acquired:
+            await websocket.send_text(json.dumps({
+                "action": "done",
+                "error": "Another streaming MDA is already running",
+            }))
+            await websocket.close()
+            return
+
         event_queue: queue.Queue = queue.Queue()
         iterator = _WSEventIterator(event_queue)
         self._stream_queue = event_queue
@@ -401,6 +419,7 @@ class ProxyServer:
 
         await mda_task
         self._stream_queue = None
+        self._stream_lock.release()
 
         result: dict[str, Any] = {"action": "done"}
         if mda_error[0]:

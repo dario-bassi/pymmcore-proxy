@@ -406,6 +406,8 @@ class RemoteMMCore:
         self._signal_ws: Any = None  # active websocket, for clean shutdown
         self._signal_thread: threading.Thread | None = None
         self._flush_events: dict[str, threading.Event] = {}
+        self._flush_counter = 0
+        self._flush_lock = threading.Lock()
         if connect_signals:
             self._start_signal_listener()
 
@@ -844,8 +846,6 @@ class RemoteMMCore:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    _flush_counter = 0
-
     def flush_signals(self, timeout: float = 5.0) -> None:
         """Block until all pending signals have been delivered.
 
@@ -857,8 +857,9 @@ class RemoteMMCore:
         HTTP request to avoid a race where the WebSocket marker arrives
         before the Event is registered.
         """
-        RemoteMMCore._flush_counter += 1
-        flush_id = f"f{RemoteMMCore._flush_counter}"
+        with self._flush_lock:
+            self._flush_counter += 1
+            flush_id = f"f{self._flush_counter}"
         ev = threading.Event()
         self._flush_events[flush_id] = ev
         try:
