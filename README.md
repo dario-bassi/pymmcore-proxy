@@ -1,6 +1,7 @@
 # pymmcore-proxy
 
 > **Warning:** This project is experimental and under active development. APIs may change without notice.
+> For a more mature implementation, see [pymmcore-remote](https://github.com/pymmcore-plus/pymmcore-remote).
 
 Network proxy for [pymmcore-plus](https://github.com/pymmcore-plus/pymmcore-plus): control microscopes remotely over HTTP and WebSocket.
 
