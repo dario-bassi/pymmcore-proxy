@@ -67,6 +67,25 @@ _MDA_SIGNALS = [
 ]
 
 
+class _LogForwarder(logging.Handler):
+    """Logging handler that broadcasts log records to WebSocket clients."""
+
+    def __init__(self, broadcast_fn):
+        super().__init__(level=logging.INFO)
+        self._broadcast = broadcast_fn
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._broadcast("_internal", "_log", (
+                record.levelno,
+                record.getMessage(),
+                record.filename,
+                record.lineno,
+            ))
+        except Exception:
+            pass
+
+
 class _WSEventIterator:
     """Iterator that yields MDAEvents from a queue, fed by a WebSocket.
 
@@ -121,6 +140,7 @@ class ProxyServer:
         self._loop = asyncio.get_event_loop()
         self._connect_signal_forwarding()
         self._install_warning_hook()
+        self._install_log_forwarding()
 
     def _install_warning_hook(self):
         """Hook warnings.showwarning to broadcast warnings to WS clients.
@@ -142,6 +162,17 @@ class ProxyServer:
             original(message, category, filename, lineno, file, line)
 
         warnings.showwarning = _hook
+
+    def _install_log_forwarding(self):
+        """Forward pymmcore-plus log records to WebSocket clients.
+
+        The MDA runner logs each event at INFO level.  By attaching a
+        handler to the ``"pymmcore-plus"`` logger we relay those records
+        to the client, where they are re-emitted through the local logger
+        so the user sees the same output as with a local core.
+        """
+        pmm_logger = logging.getLogger("pymmcore-plus")
+        pmm_logger.addHandler(_LogForwarder(self._broadcast_signal))
 
     def _connect_signal_forwarding(self):
         """Connect to core signals and forward them over WebSocket."""
