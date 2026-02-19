@@ -562,6 +562,22 @@ class RemoteMMCore:
                 category = _WARNING_CATEGORIES.get(category_name, UserWarning)
                 warnings.warn(message, category, stacklevel=2)
                 return
+            if signal_name == "_log":
+                levelno = raw_args[0] if raw_args else logging.INFO
+                message = raw_args[1] if len(raw_args) > 1 else ""
+                filename = raw_args[2] if len(raw_args) > 2 else ""
+                lineno = raw_args[3] if len(raw_args) > 3 else 0
+                record = logging.LogRecord(
+                    name="pymmcore-plus",
+                    level=levelno,
+                    pathname=filename,
+                    lineno=lineno,
+                    msg=message,
+                    args=(),
+                    exc_info=None,
+                )
+                logging.getLogger("pymmcore-plus").handle(record)
+                return
             return
 
         key = f"{group}.{signal_name}"
