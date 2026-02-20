@@ -387,6 +387,62 @@ _CMMCORE_METHODS = frozenset(
 
 
 # ------------------------------------------------------------------
+# Qt cross-thread signal emission
+# ------------------------------------------------------------------
+
+class _EmitEvent:
+    """Custom QEvent that emits a psygnal signal on the main thread.
+
+    ``QApplication.postEvent`` is safe to call from *any* thread and
+    delivers the event to the receiver's thread event loop — no QObject
+    creation on the background thread required.
+    """
+
+    _EVENT_TYPE: int | None = None
+    _receiver: Any = None  # singleton QObject on main thread
+
+    @classmethod
+    def post(cls, sig: Any, args: list) -> None:
+        from qtpy.QtCore import QEvent
+        from qtpy.QtWidgets import QApplication
+
+        if cls._EVENT_TYPE is None:
+            cls._EVENT_TYPE = QEvent.registerEventType()
+            cls._install_receiver()
+
+        app = QApplication.instance()
+        if app is None:
+            return
+        event = QEvent(QEvent.Type(cls._EVENT_TYPE))
+        event.sig = sig  # type: ignore[attr-defined]
+        event.args = args  # type: ignore[attr-defined]
+        app.postEvent(cls._receiver, event)
+
+    @classmethod
+    def _install_receiver(cls) -> None:
+        """Create a QObject and move it to the main thread to receive events."""
+        from qtpy.QtCore import QObject
+        from qtpy.QtWidgets import QApplication
+
+        class _Receiver(QObject):
+            def event(self, ev: Any) -> bool:
+                if ev.type() == _EmitEvent._EVENT_TYPE:
+                    try:
+                        ev.sig.emit(*ev.args)
+                    except Exception as e:
+                        logger.warning("Error emitting signal: %s", e)
+                    return True
+                return super().event(ev)
+
+        cls._receiver = _Receiver()
+        # Ensure event delivery happens on the main thread even if
+        # _install_receiver is called from a background thread.
+        app = QApplication.instance()
+        if app is not None:
+            cls._receiver.moveToThread(app.thread())
+
+
+# ------------------------------------------------------------------
 # The client
 # ------------------------------------------------------------------
 
@@ -645,16 +701,16 @@ class RemoteMMCore(CMMCorePlus):
 
         Signals arrive on the WebSocket background thread.  Qt widgets
         (timers, UI updates) require callbacks to run on the main thread.
-        When Qt is running we use ``QTimer.singleShot(0, ...)`` to post
-        the emission to the main event loop; otherwise we emit directly.
+        We use a Qt signal bridge to reliably post the emission across
+        threads (QTimer.singleShot doesn't work from non-Qt threads).
         """
         try:
-            from qtpy.QtCore import QThread, QTimer
+            from qtpy.QtCore import QThread
             from qtpy.QtWidgets import QApplication
 
             app = QApplication.instance()
             if app is not None and QThread.currentThread() is not app.thread():
-                QTimer.singleShot(0, lambda: sig.emit(*args))
+                _EmitEvent.post(sig, args)
                 return
         except ImportError:
             pass
