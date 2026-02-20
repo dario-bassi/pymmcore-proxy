@@ -31,7 +31,9 @@ from re import Pattern
 from typing import Any, Iterator
 
 import httpx
+import pymmcore
 from psygnal import Signal
+from pymmcore_plus import CMMCorePlus
 
 from ._serialize import decode, encode
 
@@ -374,10 +376,19 @@ _WARNING_CATEGORIES: dict[str, type[Warning]] = {
 
 
 # ------------------------------------------------------------------
+# pymmcore.CMMCore public method names (for RPC interception)
+# ------------------------------------------------------------------
+_CMMCORE_METHODS = frozenset(
+    name for name in dir(pymmcore.CMMCore)
+    if not name.startswith("_") and callable(getattr(pymmcore.CMMCore, name, None))
+)
+
+
+# ------------------------------------------------------------------
 # The client
 # ------------------------------------------------------------------
 
-class RemoteMMCore:
+class RemoteMMCore(CMMCorePlus):
     """Drop-in replacement for CMMCorePlus that proxies calls over HTTP.
 
     All method calls are forwarded to the server via POST /rpc.
@@ -392,14 +403,18 @@ class RemoteMMCore:
         timeout: float = 30.0,
         connect_signals: bool = True,
     ):
+        # Initialize SWIG C++ base for safety, but skip CMMCorePlus.__init__
+        pymmcore.CMMCore.__init__(self)
+
         self._url = url.rstrip("/")
         self._timeout = timeout
         self._http = httpx.Client(base_url=self._url, timeout=timeout)
 
-        # Local signal groups
-        self.events = _CoreSignals()
-        self.events.devicePropertyChanged = _DevicePropertySignal(self.events)
-        self.mda = _MDAController(self)
+        # Local signal groups (use _events/_mda_runner so CMMCorePlus
+        # properties .events and .mda work transparently)
+        self._events = _CoreSignals()
+        self._events.devicePropertyChanged = _DevicePropertySignal(self._events)
+        self._mda_runner = _MDAController(self)
 
         # WebSocket signal listener
         self._signal_stop = threading.Event()
@@ -475,13 +490,22 @@ class RemoteMMCore:
         if not data.get("ok"):
             self._raise_remote_error(data)
 
+    def __getattribute__(self, name: str) -> Any:
+        # Intercept pymmcore.CMMCore methods and route them through RPC
+        # instead of calling the local C++ core.
+        if name in _RPC_FORWARD_METHODS:
+            _rpc = object.__getattribute__(self, "_rpc")
+
+            def _proxy(*args: Any, **kwargs: Any) -> Any:
+                return _rpc(name, *args, **kwargs)
+
+            return _proxy
+        return object.__getattribute__(self, name)
+
     def __getattr__(self, name: str) -> Any:
         # Python internals — never proxy
         if name.startswith("__") and name.endswith("__"):
             raise AttributeError(name)
-        # Known local private attrs
-        if name == "_events":
-            return self.events
         # Single-underscore private attrs — fetch from remote
         if name.startswith("_"):
             return self._rpc_getattr(name)
@@ -919,3 +943,13 @@ class RemoteMMCore:
             self.close()
         except Exception:
             pass
+
+
+# ------------------------------------------------------------------
+# Compute CMMCore methods that need RPC forwarding
+# ------------------------------------------------------------------
+# CMMCorePlus inherits ~200 C++ methods from pymmcore.CMMCore.  Without
+# interception these would call the *local* C++ core.  __getattribute__
+# checks this set and routes matching calls through RPC instead.
+# Methods explicitly defined on RemoteMMCore are excluded.
+_RPC_FORWARD_METHODS = _CMMCORE_METHODS - frozenset(RemoteMMCore.__dict__)

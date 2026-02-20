@@ -100,7 +100,6 @@ SKIP_TESTS: dict[str, str] = {
     "test_queue_mda": "can't pass MagicMock(wraps=engine) to remote server",
     "test_get_handlers": "weakref on proxy output handlers not supported",
     # --- test_core.py ---
-    "test_core": "isinstance(core, CMMCorePlus) check",
     # Proxy changes exception types and can't monkeypatch/capture server-side
     "test_search_paths": "os.getenv on client doesn't reflect server-side PATH changes",
     "test_load_system_config": "macOS /var symlink: server resolves to /private/var",
@@ -161,6 +160,18 @@ class _AutoFlushCore:
 
     def __init__(self, client):
         object.__setattr__(self, "_client", client)
+
+    @property
+    def __class__(self):
+        return type(object.__getattribute__(self, "_client"))
+
+    def __repr__(self):
+        client = object.__getattribute__(self, "_client")
+        try:
+            n = len(list(client.getLoadedDevices()))
+        except Exception:
+            n = 0
+        return f"<CMMCorePlus(RemoteMMCore) at {client._url} with {n} devices>"
 
     def __getattr__(self, name):
         attr = getattr(self._client, name)
