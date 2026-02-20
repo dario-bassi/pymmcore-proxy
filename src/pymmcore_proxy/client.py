@@ -26,9 +26,7 @@ import re
 import threading
 import time
 import warnings
-from contextlib import contextmanager, suppress
-from re import Pattern
-from typing import Any, Iterator
+from typing import Any
 
 import httpx
 import pymmcore
@@ -212,12 +210,16 @@ class _MDAController:
 
     # -- delegation to server --
 
-    def run(self, sequence: Any) -> None:
+    def run(self, sequence: Any, *, output: Any = None) -> None:
         """Run an MDA sequence on the server (blocking).
 
         Accepts an ``MDASequence``, a ``dict``, or any iterable of
         ``MDAEvent`` objects (including generators and ``Queue``-backed
         iterators).
+
+        The *output* parameter is accepted for compatibility with
+        ``CMMCorePlus.run_mda`` but ignored — output handlers run on
+        the server side.
 
         For serializable sequences (``MDASequence``/``dict``), the whole
         sequence is sent via RPC.  For arbitrary iterables, events are
@@ -415,6 +417,18 @@ class RemoteMMCore(CMMCorePlus):
         self._events = _CoreSignals()
         self._events.devicePropertyChanged = _DevicePropertySignal(self._events)
         self._mda_runner = _MDAController(self)
+
+        # Private attrs that inherited CMMCorePlus methods rely on
+        # (normally set by CMMCorePlus.__init__ which we skip)
+        self._objective_regex = re.compile(
+            r"(.+)?(nosepiece|obj(ective)?)(turret)?s?", re.IGNORECASE
+        )
+        self._channel_group_regex = re.compile(
+            r"(chan{1,2}(el)?|filt(er)?)s?", re.IGNORECASE
+        )
+        self._last_sys_config: str | None = None
+        self._last_config: tuple[str, str] = ("", "")
+        self._last_xy_position: dict[str | None, tuple[float, float]] = {}
 
         # WebSocket signal listener
         self._signal_stop = threading.Event()
@@ -623,86 +637,32 @@ class RemoteMMCore(CMMCorePlus):
             return
 
         decoded_args = [decode(a) for a in raw_args]
+        self._emit_signal(sig, decoded_args, key)
+
+    @staticmethod
+    def _emit_signal(sig: Any, args: list, key: str) -> None:
+        """Emit a signal, marshaling to the Qt main thread if available.
+
+        Signals arrive on the WebSocket background thread.  Qt widgets
+        (timers, UI updates) require callbacks to run on the main thread.
+        When Qt is running we use ``QTimer.singleShot(0, ...)`` to post
+        the emission to the main event loop; otherwise we emit directly.
+        """
         try:
-            sig.emit(*decoded_args)
+            from qtpy.QtCore import QThread, QTimer
+            from qtpy.QtWidgets import QApplication
+
+            app = QApplication.instance()
+            if app is not None and QThread.currentThread() is not app.thread():
+                QTimer.singleShot(0, lambda: sig.emit(*args))
+                return
+        except ImportError:
+            pass
+
+        try:
+            sig.emit(*args)
         except Exception as e:
             logger.warning("Error emitting %s: %s", key, e)
-
-    # ------------------------------------------------------------------
-    # Device wrappers (created locally, delegate to RPC)
-    # ------------------------------------------------------------------
-
-    def getDeviceObject(self, device_label: str, device_type: Any = None) -> Any:
-        """Return a Device object bound to *device_label* on this core.
-
-        Creates a pymmcore-plus ``Device`` (or typed subclass) locally.
-        All device methods delegate to standard CMMCore API calls via RPC.
-        """
-        from pymmcore_plus import Device, DeviceType
-
-        dt = device_type if device_type is not None else DeviceType.Any
-        return Device.create(device_label, self, dt)
-
-    def iterDevices(
-        self,
-        device_type: Any = None,
-        device_label: Any = None,
-        device_adapter: Any = None,
-        *,
-        as_object: bool = True,
-    ) -> Any:
-        """Iterate over currently loaded devices.
-
-        Mirrors ``CMMCorePlus.iterDevices``.  When *as_object* is True
-        (the default), yields ``Device`` wrapper objects created locally.
-        """
-        import re
-
-        if device_type is None:
-            devices: list[str] = list(self._rpc("getLoadedDevices"))
-        elif isinstance(device_type, int):
-            devices = list(self._rpc("getLoadedDevicesOfType", device_type))
-        else:
-            _seen: set[str] = set()
-            for dt in device_type:
-                _seen.update(self._rpc("getLoadedDevicesOfType", dt))
-            devices = list(_seen)
-
-        if device_label:
-            ptrn = (
-                re.compile(device_label, re.IGNORECASE)
-                if isinstance(device_label, str)
-                else device_label
-            )
-            devices = [d for d in devices if ptrn.search(d)]
-
-        if device_adapter:
-            ptrn = (
-                re.compile(device_adapter, re.IGNORECASE)
-                if isinstance(device_adapter, str)
-                else device_adapter
-            )
-            devices = [
-                d for d in devices if ptrn.search(self._rpc("getDeviceLibrary", d))
-            ]
-
-        for dev in devices:
-            if as_object:
-                yield self.getDeviceObject(dev)
-            else:
-                yield dev
-
-    # ------------------------------------------------------------------
-    # Property wrappers (created locally, delegate to RPC)
-    # ------------------------------------------------------------------
-
-    def getPropertyObject(
-        self, device_label: str, property_name: str
-    ) -> Any:
-        """Return a DeviceProperty object bound to a device/property on this core."""
-        from pymmcore_plus import DeviceProperty
-
-        return DeviceProperty(device_label, property_name, self)
 
     def iterProperties(
         self,
@@ -765,16 +725,6 @@ class RemoteMMCore(CMMCorePlus):
                 else:
                     yield (dev, prop)
 
-    # ------------------------------------------------------------------
-    # Adapter wrappers (created locally, delegate to RPC)
-    # ------------------------------------------------------------------
-
-    def getAdapterObject(self, library_name: str) -> Any:
-        """Return a DeviceAdapter object bound to *library_name* on this core."""
-        from pymmcore_plus import DeviceAdapter
-
-        return DeviceAdapter(library_name, mmcore=self)
-
     def iterDeviceAdapters(
         self,
         adapter_pattern: Any = None,
@@ -799,87 +749,6 @@ class RemoteMMCore(CMMCorePlus):
                 yield self.getAdapterObject(adapter)
             else:
                 yield adapter
-
-    # ------------------------------------------------------------------
-    # Context manager (mirrors CMMCorePlus.setContext)
-    # ------------------------------------------------------------------
-
-    @contextmanager
-    def setContext(self, **kwargs: Any) -> Iterator[None]:
-        """Set core properties in a context, restoring initial values on exit.
-
-        Mirrors ``CMMCorePlus.setContext``.
-        """
-        orig_values: dict[str, Any] = {}
-        try:
-            for name, v in kwargs.items():
-                name = name[0].upper() + name[1:]
-                get_name, set_name = f"get{name}", f"set{name}"
-                orig_values[name] = self._rpc(get_name)
-                if isinstance(v, tuple):
-                    self._rpc(set_name, *v)
-                else:
-                    self._rpc(set_name, v)
-            yield
-        finally:
-            for k, v in orig_values.items():
-                with suppress(AttributeError):
-                    self._rpc(f"set{k}", v)
-
-    # ------------------------------------------------------------------
-    # Objective device pattern (mirrors CMMCorePlus)
-    # ------------------------------------------------------------------
-
-    _DEFAULT_OBJ_PATTERN = re.compile(
-        r"(.+)?(nosepiece|obj(ective)?)(turret)?s?", re.IGNORECASE
-    )
-
-    @property
-    def objective_device_pattern(self) -> Pattern:
-        """Pattern used to guess objective device labels."""
-        try:
-            return object.__getattribute__(self, "_objective_regex")
-        except AttributeError:
-            return self._DEFAULT_OBJ_PATTERN
-
-    @objective_device_pattern.setter
-    def objective_device_pattern(self, value: Pattern | str) -> None:
-        if isinstance(value, str):
-            value = re.compile(value, re.IGNORECASE)
-        elif not isinstance(value, Pattern):
-            raise TypeError(
-                "Objective Pattern must be a string or compiled regex"
-                f" but is type {type(value)}"
-            )
-        self._objective_regex = value
-
-    def guessObjectiveDevices(self) -> list[str]:
-        """Find any loaded devices likely to be an Objective/Nosepiece."""
-        from pymmcore_plus import DeviceType
-
-        return [
-            device
-            for device in self._rpc("getLoadedDevicesOfType", DeviceType.StateDevice)
-            if self.objective_device_pattern.match(device)
-        ]
-
-    # ------------------------------------------------------------------
-    # MDA convenience (mirrors CMMCorePlus.run_mda)
-    # ------------------------------------------------------------------
-
-    def run_mda(
-        self, events: Any, *, output: Any = None, block: bool = False
-    ) -> threading.Thread:
-        """Run an MDA sequence on the server.
-
-        Runs in a background thread so the caller (typically the Qt main
-        thread) stays responsive and can process incoming signals.
-        """
-        t = threading.Thread(target=self.mda.run, args=(events,), daemon=True)
-        t.start()
-        if block:
-            t.join()
-        return t
 
     # ------------------------------------------------------------------
     # Lifecycle
