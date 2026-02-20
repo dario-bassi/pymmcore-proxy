@@ -5,8 +5,6 @@
 
 Network proxy for [pymmcore-plus](https://github.com/pymmcore-plus/pymmcore-plus): control microscopes remotely over HTTP and WebSocket.
 
-The server wraps a `CMMCorePlus` instance and exposes it over the network. The client (`RemoteMMCore`) is a drop-in replacement that forwards all calls via RPC. Signals (property changes, MDA frame events, etc.) stream back to clients over WebSocket in real time.
-
 ## Installation
 
 ```bash
@@ -49,6 +47,12 @@ core.mda.run(MDASequence(time_plan={"interval": 1, "loops": 10}))
 
 core.close()
 ```
+
+The server wraps a `CMMCorePlus` instance and exposes it over the network. The client (`RemoteMMCore`) inherits from `CMMCorePlus`, so `isinstance` checks pass, IDE autocompletion works, and type checkers are happy. All calls are forwarded transparently via RPC, with signals (property changes, MDA frame events, etc.) streaming back over WebSocket in real time.
+
+### Qt / napari compatibility
+
+`RemoteMMCore` works as a drop-in replacement for [napari-micromanager](https://github.com/pymmcore-plus/napari-micromanager) and other Qt-based tools. Signals are automatically marshaled to the Qt main thread when a `QApplication` is running, so connecting `core.events` to Qt slots works out of the box.
 
 ## Architecture
 
@@ -119,7 +123,7 @@ All data crosses the wire as JSON. Custom types are tagged with `"__type__"`:
 ## Tests
 
 ```bash
-# Run the proxy's own test suite (52 tests)
+# Run the proxy's own test suite (57 tests)
 pytest
 
 # Run pymmcore-plus tests against the proxy (requires pymmcore-plus repo as sibling)
@@ -128,7 +132,7 @@ python scripts/run_compat_tests.py
 
 ## pymmcore-plus compatibility
 
-The compat test runner (`scripts/run_compat_tests.py`) runs 18 of 21 pymmcore-plus test files against `RemoteMMCore`. Out of 233 tests, **186 pass** and **46 are skipped** with documented reasons. Tests that don't use the `core` fixture run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
+The compat test runner (`scripts/run_compat_tests.py`) runs 18 of 21 pymmcore-plus test files against `RemoteMMCore`. Out of 228 tests, **184 pass** and **44 are skipped** with documented reasons. Tests that don't use the `core` fixture run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
 
 The skipped tests fall into a few categories, none should represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
 
@@ -157,12 +161,6 @@ The skipped tests fall into a few categories, none should represent limitations 
 | `test_set_mda_fov` | test_mda.py |
 | `test_mda_iterable_of_events` (3 params) | test_mda.py |
 
-### isinstance check on core object (1 test)
-
-| Test | Reason |
-|---|---|
-| `test_core` | `isinstance(core, CMMCorePlus)` — `RemoteMMCore` is not a `CMMCorePlus` subclass |
-
 ### Can't mock/monkeypatch remote objects (7 tests)
 
 | Test | Reason |
@@ -183,14 +181,13 @@ The skipped tests fall into a few categories, none should represent limitations 
 | `test_load_system_config` | macOS `/var` symlink: server resolves to `/private/var` |
 | `test_get_handlers` | `weakref` on proxy objects |
 
-### Test environment limitations (8 tests)
+### Test environment limitations (7 tests)
 
 | Test | Reason |
 |---|---|
 | `test_ome_generation` (5 params) | `local_config.cfg` not found (test creates own CMMCorePlus) |
 | `test_ome_generation_from_events` | `local_config.cfg` not found (test creates own CMMCorePlus) |
 | `test_stupidly_empty_metadata` | Requires `lxml` or `xmlschema` |
-| `test_create_schema` | Requires `lxml` or `xmlschema` |
 
 ### CMMCorePlus internals (3 tests)
 
