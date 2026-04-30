@@ -134,6 +134,7 @@ class ProxyServer:
                 Route("/rpc", self._handle_rpc, methods=["POST"]),
                 Route("/mda/exec_event", self._handle_mda_event, methods=["POST"]),
                 Route("/health", self._handle_health, methods=["GET"]),
+                Route("/info", self._handle_info, methods=["GET"]),
                 Route("/signals/flush", self._handle_flush, methods=["GET"]),
                 Route("/stats", self._handle_stats, methods=["GET"]),
                 WebSocketRoute("/signals", self._handle_signals),
@@ -227,6 +228,9 @@ class ProxyServer:
 
     async def _handle_health(self, request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
+
+    async def _handle_info(self, request: Request) -> JSONResponse:
+        return JSONResponse({"core_type": type(self.core).__name__})
 
     async def _handle_flush(self, request: Request) -> JSONResponse:
         """Flush pending signals to all connected WebSocket clients.
