@@ -310,8 +310,11 @@ class _MDAController:
     def cancel(self) -> None:
         self._client._rpc("mda.cancel")
 
+    def set_paused(self, paused: bool) -> None:
+        self._client._rpc("mda.set_paused", paused)
+
     def toggle_pause(self) -> None:
-        self._client._rpc("mda.toggle_pause")
+        self.set_paused(not self.is_paused())
 
     def is_running(self) -> bool:
         return self._client._rpc("mda.is_running")

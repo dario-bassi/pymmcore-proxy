@@ -16,6 +16,7 @@ import queue
 import threading
 import time
 import warnings
+from contextlib import asynccontextmanager
 from typing import Any
 
 import numpy as np
@@ -123,6 +124,11 @@ class ProxyServer:
         self._command_count = 0
         self._recent_commands: list[dict] = []
 
+        @asynccontextmanager
+        async def _lifespan(app):
+            self._on_startup()
+            yield
+
         self.app = Starlette(
             routes=[
                 Route("/rpc", self._handle_rpc, methods=["POST"]),
@@ -133,7 +139,7 @@ class ProxyServer:
                 WebSocketRoute("/signals", self._handle_signals),
                 WebSocketRoute("/mda/stream", self._handle_mda_stream),
             ],
-            on_startup=[self._on_startup],
+            lifespan=_lifespan,
         )
 
     def _on_startup(self):
