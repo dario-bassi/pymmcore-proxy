@@ -121,6 +121,7 @@ class ProxyServer:
         self.port = port
         self._ws_clients: set[WebSocket] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._signals_connected = False
         self._stream_queue: queue.Queue | None = None
         self._stream_lock = threading.Lock()
         self._stats_lock = threading.Lock()
@@ -149,10 +150,11 @@ class ProxyServer:
         )
 
     def _on_startup(self):
-        self._loop = asyncio.get_event_loop()
+        self._loop = asyncio.get_running_loop()
         self._connect_signal_forwarding()
         self._install_warning_hook()
         self._install_log_forwarding()
+        self._signals_connected = True
 
     def _install_warning_hook(self):
         """Hook warnings.showwarning to broadcast warnings to WS clients.
@@ -476,6 +478,15 @@ class ProxyServer:
             pass
 
     async def _handle_signals(self, websocket: WebSocket):
+        # Lazy init: if lifespan didn't run (uvicorn lifespan="off" or startup
+        # exception), set up signals here on first WS connection instead.
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+        if not self._signals_connected:
+            self._connect_signal_forwarding()
+            self._install_warning_hook()
+            self._install_log_forwarding()
+            self._signals_connected = True
         await websocket.accept()
         self._ws_clients.add(websocket)
         try:
