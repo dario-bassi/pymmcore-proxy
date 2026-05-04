@@ -111,7 +111,8 @@ class _WSEventIterator:
 class ProxyServer:
     """Wraps a CMMCorePlus/UniMMCore and serves it over HTTP + WebSocket."""
 
-    def __init__(self, core, host: str = "127.0.0.1", port: int = 5600):
+    def __init__(self, core, host: str = "127.0.0.1", port: int = 5600,
+                 extra_routes: list | None = None):
         self.core = core
         self.host = host
         self.port = port
@@ -139,6 +140,7 @@ class ProxyServer:
                 Route("/stats", self._handle_stats, methods=["GET"]),
                 WebSocketRoute("/signals", self._handle_signals),
                 WebSocketRoute("/mda/stream", self._handle_mda_stream),
+                *(extra_routes or []),
             ],
             lifespan=_lifespan,
         )
