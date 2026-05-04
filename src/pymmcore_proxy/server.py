@@ -52,6 +52,7 @@ _CORE_SIGNALS = [
     "sequenceAcquisitionStarted",
     "sequenceAcquisitionStopped",
     "autoShutterSet",
+    "shutterOpenChanged",
     "configGroupDeleted",
     "configDeleted",
     "configDefined",
