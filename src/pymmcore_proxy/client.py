@@ -184,6 +184,8 @@ class _MDASignals:
     sequenceFinished = Signal(object)
     sequenceCanceled = Signal(object)
     sequencePauseToggled = Signal(object)
+    awaitingEvent = Signal(object, object)
+    eventStarted = Signal(object)
 
 
 # ------------------------------------------------------------------
@@ -366,6 +368,7 @@ for _name in [
 for _name in [
     "frameReady", "sequenceStarted", "sequenceFinished",
     "sequenceCanceled", "sequencePauseToggled",
+    "awaitingEvent", "eventStarted",
 ]:
     _SIGNAL_MAP[f"mda.events.{_name}"] = ("mda.events", _name)
 

@@ -66,6 +66,8 @@ _MDA_SIGNALS = [
     "sequenceFinished",
     "sequenceCanceled",
     "sequencePauseToggled",
+    "awaitingEvent",
+    "eventStarted",
 ]
 
 
