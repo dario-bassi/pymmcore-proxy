@@ -129,6 +129,7 @@ class _CoreSignals:
     sequenceAcquisitionStarted = Signal(object)
     sequenceAcquisitionStopped = Signal(object)
     autoShutterSet = Signal(object)
+    shutterOpenChanged = Signal(object, object)
     configGroupDeleted = Signal(object)
     configDeleted = Signal(object, object)
     configDefined = Signal(object, object, object, object, object)
@@ -355,7 +356,7 @@ for _name in [
     "continuousSequenceAcquisitionStarted",
     "sequenceAcquisitionStarting", "sequenceAcquisitionStarted",
     "sequenceAcquisitionStopped",
-    "autoShutterSet", "configGroupDeleted",
+    "autoShutterSet", "shutterOpenChanged", "configGroupDeleted",
     "configDeleted", "configDefined", "roiSet",
 ]:
     _SIGNAL_MAP[f"events.{_name}"] = ("events", _name)
