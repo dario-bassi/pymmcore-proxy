@@ -5,6 +5,11 @@
 
 Network proxy for [pymmcore-plus](https://github.com/pymmcore-plus/pymmcore-plus): control microscopes remotely over HTTP and WebSocket.
 
+> **Supported pymmcore-plus version:** `>=0.18.1, <0.19`. The proxy is tightly
+> coupled to upstream internals; each pymmcore-plus minor release requires a
+> matching pymmcore-proxy release. The pin in `pyproject.toml` enforces this
+> automatically — `pip` will refuse to install an incompatible combination.
+
 ## Installation
 
 ```bash
