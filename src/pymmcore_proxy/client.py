@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 import re
 import threading
 import time
@@ -213,7 +214,7 @@ class _MDAController:
 
     # -- delegation to server --
 
-    def run(self, sequence: Any, *, output: Any = None) -> None:
+    def run(self, sequence: Any, *, output: Any = None, dimension_overrides: Any = None) -> None:
         """Run an MDA sequence on the server (blocking).
 
         Accepts an ``MDASequence``, a ``dict``, or any iterable of
@@ -677,7 +678,11 @@ class RemoteMMCore(CMMCorePlus):
                     args=(),
                     exc_info=None,
                 )
-                logging.getLogger("pymmcore-plus").handle(record)
+                record._proxy_forwarded = True  # prevent re-forwarding loop
+                pmm_logger = logging.getLogger("pymmcore-plus")
+                for h in pmm_logger.handlers:
+                    if not isinstance(h, logging.handlers.RotatingFileHandler):
+                        h.handle(record)
                 return
             return
 
