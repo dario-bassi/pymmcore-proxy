@@ -214,16 +214,24 @@ class _MDAController:
 
     # -- delegation to server --
 
-    def run(self, sequence: Any, *, output: Any = None, dimension_overrides: Any = None) -> None:
+    def run(
+        self,
+        sequence: Any,
+        *,
+        output: Any = None,
+        overwrite: bool = False,
+        dimension_overrides: Any = None,
+    ) -> None:
         """Run an MDA sequence on the server (blocking).
 
         Accepts an ``MDASequence``, a ``dict``, or any iterable of
         ``MDAEvent`` objects (including generators and ``Queue``-backed
         iterators).
 
-        The *output* parameter is accepted for compatibility with
-        ``CMMCorePlus.run_mda`` but ignored — output handlers run on
-        the server side.
+        The *output*, *overwrite*, and *dimension_overrides* parameters
+        are accepted for signature compatibility with the upstream
+        ``MDARunner.run`` (see pymmcore-plus 0.18.1) but ignored —
+        output handlers run on the server side.
 
         For serializable sequences (``MDASequence``/``dict``), the whole
         sequence is sent via RPC.  For arbitrary iterables, events are
@@ -392,6 +400,16 @@ _CMMCORE_METHODS = frozenset(
     name for name in dir(pymmcore.CMMCore)
     if not name.startswith("_") and callable(getattr(pymmcore.CMMCore, name, None))
 )
+
+# CMMCorePlus methods that wrap a SWIG call with a mutable out-parameter
+# (e.g. ``getLastImageMD(md)`` fills ``md`` in-place).  Such mutations are
+# lost across the RPC boundary, so we forward the whole CMMCorePlus method
+# to the server and let it execute locally there.
+_CMMCORE_PLUS_FORWARD = frozenset({
+    "getLastImageAndMD",
+    "popNextImageAndMD",
+    "getNBeforeLastImageAndMD",
+})
 
 
 # ------------------------------------------------------------------
@@ -889,4 +907,6 @@ class RemoteMMCore(CMMCorePlus):
 # interception these would call the *local* C++ core.  __getattribute__
 # checks this set and routes matching calls through RPC instead.
 # Methods explicitly defined on RemoteMMCore are excluded.
-_RPC_FORWARD_METHODS = _CMMCORE_METHODS - frozenset(RemoteMMCore.__dict__)
+_RPC_FORWARD_METHODS = (
+    _CMMCORE_METHODS | _CMMCORE_PLUS_FORWARD
+) - frozenset(RemoteMMCore.__dict__)

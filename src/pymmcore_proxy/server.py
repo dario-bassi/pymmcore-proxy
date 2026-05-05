@@ -190,8 +190,32 @@ class ProxyServer:
         pmm_logger = logging.getLogger("pymmcore-plus")
         pmm_logger.addHandler(_LogForwarder(self._broadcast_signal))
 
+    def _warn_if_qt_signals(self):
+        """Detect Qt signals on the core and warn about silent cross-thread drops.
+
+        When the host process has a ``QApplication`` running (e.g. napari),
+        ``CMMCorePlus`` auto-selects ``QCoreSignaler``.  We connect to those
+        signals from the asyncio event-loop thread, and PyQt silently drops
+        cross-thread connections — the server runs but never broadcasts
+        hardware signals.  Warn loudly with the fix.
+        """
+        events = getattr(self.core, "events", None)
+        if events is None:
+            return
+        if type(events).__name__ in ("QCoreSignaler", "QMDASignaler"):
+            logger.warning(
+                "ProxyServer: core uses Qt signals (%s). Cross-thread connect "
+                "from asyncio drops silently — clients will not receive any "
+                "hardware events. Construct the core with "
+                "PYMM_SIGNALS_BACKEND=psygnal in the environment, or set "
+                "os.environ['PYMM_SIGNALS_BACKEND']='psygnal' before "
+                "CMMCorePlus().",
+                type(events).__name__,
+            )
+
     def _connect_signal_forwarding(self):
         """Connect to core signals and forward them over WebSocket."""
+        self._warn_if_qt_signals()
         events = getattr(self.core, "events", None)
         if events:
             for name in _CORE_SIGNALS:

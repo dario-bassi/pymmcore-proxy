@@ -30,10 +30,10 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest",
-    "pymmcore-plus",
+    "pymmcore-plus>=0.18.1,<0.19",
 ]
 server = [
-    "pymmcore-plus",
+    "pymmcore-plus>=0.18.1,<0.19",
 ]
 
 [build-system]

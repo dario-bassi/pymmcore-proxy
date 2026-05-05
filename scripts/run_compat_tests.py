@@ -99,9 +99,32 @@ SKIP_TESTS: dict[str, str] = {
     "test_engine_protocol": "can't pass local MyEngine to remote server",
     "test_queue_mda": "can't pass MagicMock(wraps=engine) to remote server",
     "test_get_handlers": "weakref on proxy output handlers not supported",
+    # SkipEvent tests inject a local Python engine via patch.object —
+    # the engine runs server-side so the patch never takes effect.
+    "test_skip_event_from_setup": "patches core.mda._engine with local Python engine",
+    "test_skip_event_multi_frame": "patches core.mda._engine with local Python engine",
+    "test_none_payload_calls_skip": "patches core.mda._engine with local Python engine",
+    "test_skip_event_teardown_still_called": "patches core.mda._engine with local Python engine",
+    # ROI-on-event tests assert on SequencedEvent identity returned by
+    # core.mda.engine.event_iterator() — the iterator runs server-side and
+    # the proxy can't reproduce SequencedEvent isinstance checks across the wire.
+    "test_setup_event_roi_multi_timepoint": "asserts isinstance(event, SequencedEvent) on server-side iterator output",
+    "test_roi_on_sequenced_event": "asserts isinstance(event, SequencedEvent) on server-side iterator output",
+    "test_different_roi_breaks_sequencing": "asserts isinstance(event, SequencedEvent) on server-side iterator output",
+    # restore_initial_state set on engine doesn't propagate cleanly through
+    # _NestedProxy and the test relies on FocusDirection warnings from server.
+    "test_setup_event_properties": "engine.restore_initial_state doesn't apply across the proxy",
+    # New in 0.18.1: hardware-sequenced timeout. The TimeoutError is raised
+    # inside the server-side engine; our RPC re-raises as RuntimeError,
+    # so pytest.raises(TimeoutError) doesn't match.
+    "test_sequenced_acq_timeout_raise": "TimeoutError on server is re-raised as RuntimeError on client",
+    "test_sequenced_acq_timeout_warn": "engine timeout attrs require server-side state machine",
     # --- test_core.py ---
     # Proxy changes exception types and can't monkeypatch/capture server-side
     "test_search_paths": "os.getenv on client doesn't reflect server-side PATH changes",
+    # core.mda.status is a dataclass on server; _MDAController.__getattr__ resolves
+    # to value (str repr) instead of returning a _NestedProxy with attribute access.
+    "test_core": "core.mda.status.phase: status resolved as str, not nested proxy",
     "test_load_system_config": "macOS /var symlink: server resolves to /private/var",
     "test_guess_channel_group": "uses patch.object on core",
     "test_describe": "capsys can't capture server-side stdout",
@@ -138,7 +161,8 @@ from __future__ import annotations
 import socket
 import threading
 import time
-from typing import Any, Iterator
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator
 
 import httpx
 import pytest
@@ -361,6 +385,69 @@ def core(_server_url) -> Iterator[Any]:
         pass
     yield _AutoFlushCore(client)
     client.close()
+
+
+class PsygnalBot:
+    """Lightweight replacement for qtbot's signal-waiting API.
+
+    Mirrors pymmcore-plus's own conftest helper.  Used by ``anybot``
+    fixture so tests can ``with anybot.waitSignal(sig): ...`` without
+    a Qt event loop.
+    """
+
+    @contextmanager
+    def waitSignal(self, signal, **kwargs):
+        with self.waitSignals([signal], **kwargs):
+            yield
+
+    @contextmanager
+    def waitSignals(self, signals, *, timeout=5000, check_params_cbs=None, order=None):
+        received: list[int] = []
+        slots: list[Callable] = []
+        for i, sig in enumerate(signals):
+            pcb = check_params_cbs[i] if check_params_cbs else None
+
+            def _slot(*a, _i=i, _pcb=pcb):
+                if not _pcb or _pcb(*a):
+                    received.append(_i)
+
+            slots.append(_slot)
+            sig.connect(_slot)
+        try:
+            yield
+        finally:
+            self.waitUntil(
+                lambda: len(received) >= len(signals),
+                timeout=timeout,
+            )
+            for sig, slot in zip(signals, slots):
+                sig.disconnect(slot)
+            if order == "strict":
+                assert received == list(range(len(signals)))
+
+    def waitUntil(self, callback, *, timeout=5000):
+        deadline = time.monotonic() + timeout / 1000
+        while time.monotonic() < deadline:
+            if callback():
+                return
+            time.sleep(0.01)
+        raise TimeoutError(f"Condition not met within {timeout}ms")
+
+    @contextmanager
+    def capture_exceptions(self):
+        yield []
+
+
+@pytest.fixture
+def anybot():
+    """Provide a qtbot-like interface backed by psygnal.
+
+    pymmcore-plus 0.18.1 introduced the ``anybot`` fixture (in its own
+    conftest) that returns either ``qtbot`` or a ``PsygnalBot`` based
+    on which signaler the core uses.  RemoteMMCore always uses psygnal
+    locally, so we always return ``PsygnalBot``.
+    """
+    return PsygnalBot()
 
 
 @pytest.fixture

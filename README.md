@@ -5,6 +5,11 @@
 
 Network proxy for [pymmcore-plus](https://github.com/pymmcore-plus/pymmcore-plus): control microscopes remotely over HTTP and WebSocket.
 
+> **Supported pymmcore-plus version:** `>=0.18.1, <0.19`. The proxy is tightly
+> coupled to upstream internals; each pymmcore-plus minor release requires a
+> matching pymmcore-proxy release. The pin in `pyproject.toml` enforces this
+> automatically — `pip` will refuse to install an incompatible combination.
+
 ## Installation
 
 ```bash
@@ -132,9 +137,9 @@ python scripts/run_compat_tests.py
 
 ## pymmcore-plus compatibility
 
-The compat test runner (`scripts/run_compat_tests.py`) runs 18 of 21 pymmcore-plus test files against `RemoteMMCore`. Out of 228 tests, **184 pass** and **44 are skipped** with documented reasons. Tests that don't use the `core` fixture run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
+The compat test runner (`scripts/run_compat_tests.py`) runs 18 of 21 pymmcore-plus test files against `RemoteMMCore` (currently pinned to pymmcore-plus v0.18.1). Out of 246 collected tests, **197 pass**, **48 are skipped** with documented reasons, and 1 is `xfail`. Tests that don't use the `core` fixture run as local pymmcore-plus tests to verify no interference from the proxy test infrastructure.
 
-The skipped tests fall into a few categories, none should represent limitations of normal proxy usage. They are all test-specific issues where the test infrastructure assumes in-process access.
+The skipped tests fall into a few categories. Most reflect test-infrastructure assumptions about in-process access; a handful are documented proxy limitations that don't affect normal usage.
 
 ### Test files not included (3 files)
 
@@ -161,7 +166,7 @@ The skipped tests fall into a few categories, none should represent limitations 
 | `test_set_mda_fov` | test_mda.py |
 | `test_mda_iterable_of_events` (3 params) | test_mda.py |
 
-### Can't mock/monkeypatch remote objects (7 tests)
+### Can't mock/monkeypatch remote objects (11 tests)
 
 | Test | Reason |
 |---|---|
@@ -172,14 +177,30 @@ The skipped tests fall into a few categories, none should represent limitations 
 | `test_engine_protocol` | Passes local `MyEngine` to server |
 | `test_queue_mda` | `MagicMock(wraps=engine)` |
 | `test_describe` | `capsys` can't capture server stdout |
+| `test_skip_event_from_setup` | `patch.object(core.mda, "_engine", LocalEngine())` |
+| `test_skip_event_multi_frame` | `patch.object(core.mda, "_engine", LocalEngine())` |
+| `test_none_payload_calls_skip` | `patch.object(core.mda, "_engine", LocalEngine())` |
+| `test_skip_event_teardown_still_called` | `patch.object(core.mda, "_engine", LocalEngine())` |
 
-### Proxy transport limitations (3 tests)
+### Proxy transport limitations (7 tests)
 
 | Test | Reason |
 |---|---|
 | `test_search_paths` | `os.getenv` on client doesn't reflect server-side PATH |
 | `test_load_system_config` | macOS `/var` symlink: server resolves to `/private/var` |
 | `test_get_handlers` | `weakref` on proxy objects |
+| `test_core` | `core.mda.status.phase` resolves as `str` (not nested proxy) |
+| `test_setup_event_properties` | `engine.restore_initial_state` doesn't apply across the proxy |
+| `test_sequenced_acq_timeout_raise` | Server-side `TimeoutError` re-raised as `RuntimeError` on client |
+| `test_sequenced_acq_timeout_warn` | engine timeout attrs require server-side state machine |
+
+### Server-side iterator returns (3 tests)
+
+| Test | Reason |
+|---|---|
+| `test_setup_event_roi_multi_timepoint` | asserts `isinstance(event, SequencedEvent)` from `event_iterator()` |
+| `test_roi_on_sequenced_event` | asserts `isinstance(event, SequencedEvent)` from `event_iterator()` |
+| `test_different_roi_breaks_sequencing` | asserts `isinstance(event, SequencedEvent)` from `event_iterator()` |
 
 ### Test environment limitations (7 tests)
 
