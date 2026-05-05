@@ -385,6 +385,16 @@ _CMMCORE_METHODS = frozenset(
     if not name.startswith("_") and callable(getattr(pymmcore.CMMCore, name, None))
 )
 
+# CMMCorePlus methods that wrap a SWIG call with a mutable out-parameter
+# (e.g. ``getLastImageMD(md)`` fills ``md`` in-place).  Such mutations are
+# lost across the RPC boundary, so we forward the whole CMMCorePlus method
+# to the server and let it execute locally there.
+_CMMCORE_PLUS_FORWARD = frozenset({
+    "getLastImageAndMD",
+    "popNextImageAndMD",
+    "getNBeforeLastImageAndMD",
+})
+
 
 # ------------------------------------------------------------------
 # Qt cross-thread signal emission
@@ -877,4 +887,6 @@ class RemoteMMCore(CMMCorePlus):
 # interception these would call the *local* C++ core.  __getattribute__
 # checks this set and routes matching calls through RPC instead.
 # Methods explicitly defined on RemoteMMCore are excluded.
-_RPC_FORWARD_METHODS = _CMMCORE_METHODS - frozenset(RemoteMMCore.__dict__)
+_RPC_FORWARD_METHODS = (
+    _CMMCORE_METHODS | _CMMCORE_PLUS_FORWARD
+) - frozenset(RemoteMMCore.__dict__)
