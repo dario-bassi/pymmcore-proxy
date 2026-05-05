@@ -211,16 +211,24 @@ class _MDAController:
 
     # -- delegation to server --
 
-    def run(self, sequence: Any, *, output: Any = None) -> None:
+    def run(
+        self,
+        sequence: Any,
+        *,
+        output: Any = None,
+        overwrite: bool = False,
+        dimension_overrides: Any = None,
+    ) -> None:
         """Run an MDA sequence on the server (blocking).
 
         Accepts an ``MDASequence``, a ``dict``, or any iterable of
         ``MDAEvent`` objects (including generators and ``Queue``-backed
         iterators).
 
-        The *output* parameter is accepted for compatibility with
-        ``CMMCorePlus.run_mda`` but ignored — output handlers run on
-        the server side.
+        The *output*, *overwrite*, and *dimension_overrides* parameters
+        are accepted for signature compatibility with the upstream
+        ``MDARunner.run`` (see pymmcore-plus 0.18.1) but ignored —
+        output handlers run on the server side.
 
         For serializable sequences (``MDASequence``/``dict``), the whole
         sequence is sent via RPC.  For arbitrary iterables, events are
