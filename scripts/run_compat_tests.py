@@ -138,7 +138,8 @@ from __future__ import annotations
 import socket
 import threading
 import time
-from typing import Any, Iterator
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator
 
 import httpx
 import pytest
@@ -361,6 +362,69 @@ def core(_server_url) -> Iterator[Any]:
         pass
     yield _AutoFlushCore(client)
     client.close()
+
+
+class PsygnalBot:
+    """Lightweight replacement for qtbot's signal-waiting API.
+
+    Mirrors pymmcore-plus's own conftest helper.  Used by ``anybot``
+    fixture so tests can ``with anybot.waitSignal(sig): ...`` without
+    a Qt event loop.
+    """
+
+    @contextmanager
+    def waitSignal(self, signal, **kwargs):
+        with self.waitSignals([signal], **kwargs):
+            yield
+
+    @contextmanager
+    def waitSignals(self, signals, *, timeout=5000, check_params_cbs=None, order=None):
+        received: list[int] = []
+        slots: list[Callable] = []
+        for i, sig in enumerate(signals):
+            pcb = check_params_cbs[i] if check_params_cbs else None
+
+            def _slot(*a, _i=i, _pcb=pcb):
+                if not _pcb or _pcb(*a):
+                    received.append(_i)
+
+            slots.append(_slot)
+            sig.connect(_slot)
+        try:
+            yield
+        finally:
+            self.waitUntil(
+                lambda: len(received) >= len(signals),
+                timeout=timeout,
+            )
+            for sig, slot in zip(signals, slots):
+                sig.disconnect(slot)
+            if order == "strict":
+                assert received == list(range(len(signals)))
+
+    def waitUntil(self, callback, *, timeout=5000):
+        deadline = time.monotonic() + timeout / 1000
+        while time.monotonic() < deadline:
+            if callback():
+                return
+            time.sleep(0.01)
+        raise TimeoutError(f"Condition not met within {timeout}ms")
+
+    @contextmanager
+    def capture_exceptions(self):
+        yield []
+
+
+@pytest.fixture
+def anybot():
+    """Provide a qtbot-like interface backed by psygnal.
+
+    pymmcore-plus 0.18.1 introduced the ``anybot`` fixture (in its own
+    conftest) that returns either ``qtbot`` or a ``PsygnalBot`` based
+    on which signaler the core uses.  RemoteMMCore always uses psygnal
+    locally, so we always return ``PsygnalBot``.
+    """
+    return PsygnalBot()
 
 
 @pytest.fixture
