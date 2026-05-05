@@ -79,6 +79,8 @@ class _LogForwarder(logging.Handler):
         self._broadcast = broadcast_fn
 
     def emit(self, record: logging.LogRecord) -> None:
+        if getattr(record, "_proxy_forwarded", False):
+            return  # already re-emitted by a client in the same process; skip
         try:
             self._broadcast("_internal", "_log", (
                 record.levelno,
