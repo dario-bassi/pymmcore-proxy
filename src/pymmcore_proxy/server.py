@@ -130,6 +130,9 @@ class ProxyServer:
         self._start_time = time.time()
         self._command_count = 0
         self._recent_commands: list[dict] = []
+        # Queue-based signal sender: guarantees ordered, reliable delivery.
+        self._signal_queue: asyncio.Queue | None = None
+        self._sender_task: asyncio.Task | None = None
 
         @asynccontextmanager
         async def _lifespan(app):
@@ -153,6 +156,8 @@ class ProxyServer:
 
     def _on_startup(self):
         self._loop = asyncio.get_running_loop()
+        self._signal_queue = asyncio.Queue()
+        self._sender_task = asyncio.create_task(self._run_signal_sender())
         self._connect_signal_forwarding()
         self._install_warning_hook()
         self._install_log_forwarding()
@@ -237,6 +242,28 @@ class ProxyServer:
             self._broadcast_signal(group, name, args)
         return handler
 
+    async def _run_signal_sender(self) -> None:
+        """Drain the signal queue and send each message to all WS clients.
+
+        Using a single persistent task instead of per-signal
+        run_coroutine_threadsafe guarantees:
+        - Messages are sent in emission order (FIFO queue).
+        - Each send is properly awaited (no silent Future discard).
+        - No concurrent sends on the same WebSocket.
+        """
+        while True:
+            try:
+                msg = await self._signal_queue.get()
+                if msg is None:       # shutdown sentinel
+                    return
+                for ws in list(self._ws_clients):
+                    try:
+                        await ws.send_text(msg)
+                    except Exception:
+                        self._ws_clients.discard(ws)
+            except Exception as e:
+                logger.warning("Signal sender error: %s", e)
+
     def _broadcast_signal(self, group: str, name: str, args: tuple):
         if not self._ws_clients or self._loop is None:
             return
@@ -249,11 +276,17 @@ class ProxyServer:
         except Exception as e:
             logger.warning(f"Failed to serialize signal {group}.{name}: {e}")
             return
-        for ws in list(self._ws_clients):
-            try:
-                asyncio.run_coroutine_threadsafe(ws.send_text(msg), self._loop)
-            except Exception:
-                self._ws_clients.discard(ws)
+        if self._signal_queue is not None:
+            # Thread-safe enqueue: call_soon_threadsafe schedules put_nowait
+            # in the event loop, preserving emission order from any thread.
+            self._loop.call_soon_threadsafe(self._signal_queue.put_nowait, msg)
+        else:
+            # Fallback before startup (should not normally occur).
+            for ws in list(self._ws_clients):
+                try:
+                    asyncio.run_coroutine_threadsafe(ws.send_text(msg), self._loop)
+                except Exception:
+                    self._ws_clients.discard(ws)
 
     # ------------------------------------------------------------------
     # HTTP handlers
@@ -268,24 +301,26 @@ class ProxyServer:
     async def _handle_flush(self, request: Request) -> JSONResponse:
         """Flush pending signals to all connected WebSocket clients.
 
-        Yields to the event loop so any signals queued via
-        ``run_coroutine_threadsafe`` are sent first, then sends a
-        ``_flush`` marker.  Since WS messages are ordered, the client
-        knows all prior signals have been delivered when it receives
-        the marker.
+        Enqueues a ``_flush`` marker through the same signal queue so
+        that it is guaranteed to arrive after all previously enqueued
+        signals.  The client knows all prior signals have been delivered
+        when it receives the marker.
         """
-        await asyncio.sleep(0)
         flush_id = request.query_params.get("id", str(time.monotonic()))
         msg = json.dumps({
             "group": "_internal",
             "signal": "_flush",
             "args": [flush_id],
         })
-        for ws in list(self._ws_clients):
-            try:
-                await ws.send_text(msg)
-            except Exception:
-                self._ws_clients.discard(ws)
+        if self._signal_queue is not None:
+            self._signal_queue.put_nowait(msg)
+        else:
+            await asyncio.sleep(0)
+            for ws in list(self._ws_clients):
+                try:
+                    await ws.send_text(msg)
+                except Exception:
+                    self._ws_clients.discard(ws)
         return JSONResponse({"ok": True, "id": flush_id})
 
     async def _handle_stats(self, request: Request) -> JSONResponse:
@@ -508,6 +543,9 @@ class ProxyServer:
         # exception), set up signals here on first WS connection instead.
         if self._loop is None:
             self._loop = asyncio.get_running_loop()
+        if self._signal_queue is None:
+            self._signal_queue = asyncio.Queue()
+            self._sender_task = asyncio.create_task(self._run_signal_sender())
         if not self._signals_connected:
             self._connect_signal_forwarding()
             self._install_warning_hook()
