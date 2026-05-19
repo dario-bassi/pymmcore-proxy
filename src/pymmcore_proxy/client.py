@@ -266,7 +266,7 @@ class _MDAController:
         self.events.sequenceFinished.connect(_on_done)
         self.events.sequenceCanceled.connect(_on_done)
         try:
-            self._client._rpc("mda.run", sequence)
+            self._client._rpc("mda.run", sequence, _timeout=None)
             done.wait(timeout=10.0)
         finally:
             self.events.sequenceFinished.disconnect(_on_done)
@@ -553,14 +553,19 @@ class RemoteMMCore(CMMCorePlus):
         exc_cls = RemoteMMCore._EXCEPTION_TYPES.get(error_type, RuntimeError)
         raise exc_cls(error_msg)
 
-    def _rpc(self, method: str, *args: Any, **kwargs: Any) -> Any:
-        """Call a method on the remote core (supports dotted paths)."""
+    def _rpc(self, method: str, *args: Any, _timeout: Any = ..., **kwargs: Any) -> Any:
+        """Call a method on the remote core (supports dotted paths).
+
+        Pass ``_timeout=None`` to disable the per-request timeout (e.g. for
+        long-running calls like ``mda.run`` whose duration is unbounded).
+        """
         payload = {
             "method": method,
             "args": [encode(a) for a in args],
             "kwargs": {k: encode(v) for k, v in kwargs.items()},
         }
-        resp = self._http.post("/rpc", json=payload)
+        timeout = self._timeout if _timeout is ... else _timeout
+        resp = self._http.post("/rpc", json=payload, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
         if data.get("ok"):
