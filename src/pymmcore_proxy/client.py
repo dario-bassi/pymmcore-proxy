@@ -267,7 +267,7 @@ class _MDAController:
         self.events.sequenceCanceled.connect(_on_done)
         try:
             self._client._rpc("mda.run", sequence, _timeout=None)
-            done.wait(timeout=10.0)
+            done.wait()
         finally:
             self.events.sequenceFinished.disconnect(_on_done)
             self.events.sequenceCanceled.disconnect(_on_done)
@@ -313,8 +313,10 @@ class _MDAController:
                 except TimeoutError:
                     pass
 
-            # Ensure sequenceFinished/Canceled signal has arrived
-            done.wait(timeout=10.0)
+            # Ensure sequenceFinished/Canceled signal has arrived.
+            # No timeout: mda.run() is non-blocking, so the server ack arrives
+            # before the MDA completes. We must wait indefinitely here.
+            done.wait()
         finally:
             self.events.sequenceFinished.disconnect(_on_done)
             self.events.sequenceCanceled.disconnect(_on_done)
@@ -650,7 +652,7 @@ class RemoteMMCore(CMMCorePlus):
         """Connect and listen until disconnected."""
         from websockets.sync.client import connect
 
-        with connect(ws_url) as ws:
+        with connect(ws_url, ping_interval=None) as ws:
             self._signal_ws = ws
             logger.debug("Signal listener connected to %s", ws_url)
             try:
