@@ -569,7 +569,7 @@ class ProxyServer:
     def run(self):
         """Start the server (blocking)."""
         import uvicorn
-        uvicorn.run(self.app, host=self.host, port=self.port)
+        uvicorn.run(self.app, host=self.host, port=self.port, ws="wsproto")
 
 
 def serve(core, host: str = "127.0.0.1", port: int = 5600):
